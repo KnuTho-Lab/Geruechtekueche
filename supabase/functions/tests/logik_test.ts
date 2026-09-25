@@ -2,11 +2,20 @@
 // Ausfuehren: deno test supabase/functions/tests/
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
+  AEHNLICHKEITS_SCHWELLE,
+  baueEmbeddingAnfrage,
   baueGeruechtListe,
   BEGRUENDUNG_MAX,
+  EMBEDDING_DIMENSION,
+  EMBEDDING_MODELL,
   ENDPUNKTE,
+  entscheideZuordnung,
   KERNAUSSAGE_MAX,
+  MELDUNG_ANTWORT_BEISPIEL,
+  MELDUNG_ANTWORT_FELDER,
   MELDUNG_BEISPIEL,
+  parseEmbeddingAntwort,
+  parseTreffer,
   parseGeruechtId,
   parseStatusFilter,
   pruefeApiKey,
@@ -14,6 +23,7 @@ import {
   TEXT_MAX,
   validiereKlassifizierung,
   validiereMeldung,
+  vektorAlsText,
   waehleAdminKey,
 } from "../_shared/logik.ts";
 
@@ -190,6 +200,109 @@ Deno.test("klassifizierung: unbekannte Felder werden abgelehnt", () => {
 
 Deno.test("klassifizierung: kein Objekt -> Fehler", () => {
   for (const body of [null, "x", 3, []]) assert(!validiereKlassifizierung(body).ok);
+});
+
+// --- Embedding: Anfrage und Antwort ------------------------------------------
+
+const antwortMit = (embedding: unknown) => ({ object: "list", data: [{ index: 0, embedding }], model: "x" });
+const vektor = (n: number, wert = 0.01) => Array.from({ length: n }, () => wert);
+
+Deno.test("embedding: Anfrage nennt Modell und Text", () => {
+  assertEquals(baueEmbeddingAnfrage("X wird aufgelöst"), { model: EMBEDDING_MODELL, input: "X wird aufgelöst" });
+});
+
+Deno.test("embedding: gueltige Antwort liefert den Vektor", () => {
+  const v = vektor(EMBEDDING_DIMENSION);
+  assertEquals(parseEmbeddingAntwort(antwortMit(v)), { ok: true, wert: v });
+});
+
+Deno.test("embedding: Dimension wird geprueft, Standard ist die Spaltenbreite", () => {
+  assertEquals(EMBEDDING_DIMENSION, 3072);
+  assert(!parseEmbeddingAntwort(antwortMit(vektor(EMBEDDING_DIMENSION - 1))).ok);
+  assert(!parseEmbeddingAntwort(antwortMit(vektor(EMBEDDING_DIMENSION + 1))).ok);
+  assert(parseEmbeddingAntwort(antwortMit(vektor(3)), 3).ok);
+});
+
+Deno.test("embedding: Fehlerobjekt des Dienstes wird mit Text gemeldet", () => {
+  const e = parseEmbeddingAntwort({ error: { message: "Invalid API key", code: 401 } });
+  assert(!e.ok);
+  assert(e.fehler[0].includes("Invalid API key"));
+  assert(!parseEmbeddingAntwort({ error: {} }).ok);
+});
+
+Deno.test("embedding: kaputte Formen -> Fehler statt Absturz", () => {
+  for (const roh of [null, undefined, "text", 42, [], {}, { data: [] }, { data: [null] }, { data: "x" },
+    { data: [{}] }, { data: [{ embedding: "0.1,0.2" }] }]) {
+    assert(!parseEmbeddingAntwort(roh).ok, `sollte ungueltig sein: ${JSON.stringify(roh)}`);
+  }
+});
+
+Deno.test("embedding: nicht-endliche oder falsche Werte im Vektor -> Fehler", () => {
+  for (const schlecht of [NaN, Infinity, "0.1", null]) {
+    const v: unknown[] = vektor(3);
+    v[1] = schlecht;
+    assert(!parseEmbeddingAntwort(antwortMit(v), 3).ok, `sollte ungueltig sein: ${String(schlecht)}`);
+  }
+});
+
+Deno.test("embedding: Vektor als Text in pgvector-Schreibweise", () => {
+  assertEquals(vektorAlsText([0.5, -0.25, 1e-7]), "[0.5,-0.25,1e-7]");
+});
+
+// --- Suchtreffer und Zuordnung -----------------------------------------------
+
+Deno.test("treffer: leere Liste heisst kein Treffer", () => {
+  assertEquals(parseTreffer([]), { ok: true, wert: null });
+});
+
+Deno.test("treffer: erste Zeile wird uebernommen", () => {
+  assertEquals(parseTreffer([{ geruecht_id: 7, aehnlichkeit: 0.91 }]), {
+    ok: true,
+    wert: { geruecht_id: 7, aehnlichkeit: 0.91 },
+  });
+});
+
+Deno.test("treffer: kaputte Formen -> Fehler", () => {
+  for (const roh of [null, {}, "x", [null], [{}], [{ geruecht_id: "7", aehnlichkeit: 0.9 }],
+    [{ geruecht_id: 0, aehnlichkeit: 0.9 }], [{ geruecht_id: 7 }], [{ geruecht_id: 7, aehnlichkeit: NaN }]]) {
+    assert(!parseTreffer(roh).ok, `sollte ungueltig sein: ${JSON.stringify(roh)}`);
+  }
+});
+
+Deno.test("zuordnung: explizite geruecht_id gewinnt immer, auch gegen einen Treffer", () => {
+  assertEquals(entscheideZuordnung(3, { geruecht_id: 9, aehnlichkeit: 0.99 }, 0.8), {
+    art: "explizit",
+    geruecht_id: 3,
+    aehnlichkeit: null,
+  });
+  assertEquals(entscheideZuordnung(3, null, 0.8).art, "explizit");
+});
+
+Deno.test("zuordnung: Treffer ab Schwelle ordnet zu, Grenze selbst zaehlt", () => {
+  assertEquals(entscheideZuordnung(null, { geruecht_id: 9, aehnlichkeit: 0.85 }, 0.8), {
+    art: "embedding",
+    geruecht_id: 9,
+    aehnlichkeit: 0.85,
+  });
+  assertEquals(entscheideZuordnung(null, { geruecht_id: 9, aehnlichkeit: 0.8 }, 0.8).art, "embedding");
+});
+
+Deno.test("zuordnung: Treffer unter Schwelle oder kein Treffer -> neues Geruecht", () => {
+  const neu = { art: "neu", geruecht_id: null, aehnlichkeit: null } as const;
+  assertEquals(entscheideZuordnung(null, { geruecht_id: 9, aehnlichkeit: 0.7999 }, 0.8), neu);
+  assertEquals(entscheideZuordnung(null, null, 0.8), neu);
+});
+
+Deno.test("zuordnung: Standard ist AEHNLICHKEITS_SCHWELLE, ein sinnvoller Wert", () => {
+  assert(AEHNLICHKEITS_SCHWELLE > 0 && AEHNLICHKEITS_SCHWELLE < 1);
+  const knapp = entscheideZuordnung(null, { geruecht_id: 1, aehnlichkeit: AEHNLICHKEITS_SCHWELLE });
+  assertEquals(knapp.art, "embedding");
+  const darunter = entscheideZuordnung(null, { geruecht_id: 1, aehnlichkeit: AEHNLICHKEITS_SCHWELLE - 0.001 });
+  assertEquals(darunter.art, "neu");
+});
+
+Deno.test("meldungsschema: Antwortbeispiel und Feldbeschreibung passen zueinander", () => {
+  assertEquals(Object.keys(MELDUNG_ANTWORT_BEISPIEL).sort(), Object.keys(MELDUNG_ANTWORT_FELDER).sort());
 });
 
 // --- pruefeApiKey ------------------------------------------------------------

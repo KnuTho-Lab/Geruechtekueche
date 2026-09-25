@@ -154,6 +154,95 @@ export function validiereKlassifizierung(body: unknown): Ergebnis<Klassifizierun
   return ok({ geruecht_id: id.wert, kategorie, kernaussage, konfidenz, begruendung, manuell_pruefen: manuellPruefen });
 }
 
+// --- Embedding und Zuordnung -------------------------------------------------
+
+export const EMBEDDING_MODELL = "google/gemini-embedding-001";
+export const EMBEDDING_URL = "https://openrouter.ai/api/v1/embeddings";
+// Gemessen am 2026-09-25, muss zur Spalte meldungen.embedding (halfvec(3072)) passen
+export const EMBEDDING_DIMENSION = 3072;
+
+// PLATZHALTER: Ab dieser Kosinus-Aehnlichkeit gilt eine Meldung als dasselbe Geruecht.
+// Wird spaeter mit 40 bis 60 von Hand markierten Meldungspaaren kalibriert.
+// Startwert 0.80 aus Stichproben vom 2026-09-25 (gemini-embedding-001):
+//   gleiches Geruecht, umformuliert:          0.79 bis 0.97
+//   verschiedene Geruechte:                   0.56 bis 0.66
+//   verschiedene Geruechte, beide mit [TEST]: 0.68 bis 0.76 (gemeinsames Praefix hebt an)
+// Eher hoch gewaehlt: eine falsche Zusammenlegung verfaelscht eine Akte, eine falsche
+// Trennung ergibt nur zwei Akten zum selben Geruecht.
+export const AEHNLICHKEITS_SCHWELLE = 0.8;
+
+export function baueEmbeddingAnfrage(text: string) {
+  return { model: EMBEDDING_MODELL, input: text };
+}
+
+// Prueft die Antwort von OpenRouter und liefert den Vektor. Auch bei HTTP 200 kann
+// statt data ein error-Objekt kommen, deshalb wird die Form vollstaendig geprueft.
+export function parseEmbeddingAntwort(roh: unknown, dimension = EMBEDDING_DIMENSION): Ergebnis<number[]> {
+  if (typeof roh !== "object" || roh === null || Array.isArray(roh)) {
+    return fehler("Embedding-Antwort ist kein JSON-Objekt");
+  }
+  const r = roh as Record<string, unknown>;
+  if (typeof r.error === "object" && r.error !== null) {
+    const meldung = (r.error as Record<string, unknown>).message;
+    return fehler(`Embedding-Dienst meldet Fehler: ${typeof meldung === "string" ? meldung : "ohne Text"}`);
+  }
+  const erstes = Array.isArray(r.data) ? r.data[0] : undefined;
+  const vektor = typeof erstes === "object" && erstes !== null
+    ? (erstes as Record<string, unknown>).embedding
+    : undefined;
+  if (!Array.isArray(vektor)) return fehler("Embedding-Antwort enthaelt kein data[0].embedding");
+  if (vektor.length !== dimension) {
+    return fehler(`Embedding hat ${vektor.length} statt ${dimension} Dimensionen`);
+  }
+  if (!vektor.every((x) => typeof x === "number" && Number.isFinite(x))) {
+    return fehler("Embedding enthaelt Werte, die keine endlichen Zahlen sind");
+  }
+  return ok(vektor as number[]);
+}
+
+// PostgREST nimmt den Vektor als Text in pgvector-Schreibweise '[0.1,0.2,...]' entgegen
+export function vektorAlsText(vektor: number[]): string {
+  return JSON.stringify(vektor);
+}
+
+export interface Treffer {
+  geruecht_id: number;
+  aehnlichkeit: number;
+}
+
+// Ergebnis von .rpc("aehnlichstes_geruecht"): keine oder eine Zeile
+export function parseTreffer(roh: unknown): Ergebnis<Treffer | null> {
+  if (!Array.isArray(roh)) return fehler("Suchergebnis ist keine Liste");
+  if (roh.length === 0) return ok(null);
+  const z = roh[0] as Record<string, unknown> | null;
+  const id = typeof z?.geruecht_id === "number" ? parseGeruechtId(z.geruecht_id) : parseGeruechtId(null);
+  const aehnlichkeit = z?.aehnlichkeit;
+  if (!id.ok || typeof aehnlichkeit !== "number" || !Number.isFinite(aehnlichkeit)) {
+    return fehler("Suchergebnis hat keine gueltige geruecht_id und aehnlichkeit");
+  }
+  return ok({ geruecht_id: id.wert, aehnlichkeit });
+}
+
+export type Zuordnung =
+  | { art: "explizit"; geruecht_id: number; aehnlichkeit: null }
+  | { art: "embedding"; geruecht_id: number; aehnlichkeit: number }
+  | { art: "neu"; geruecht_id: null; aehnlichkeit: null };
+
+// Entscheidet, wohin eine Meldung gehoert. Eine angegebene geruecht_id gewinnt immer.
+// Die Schwelle wird hier noch einmal geprueft, auch wenn die Datenbank schon filtert:
+// die Entscheidung haengt so nicht allein an der SQL-Funktion.
+export function entscheideZuordnung(
+  explizit: number | null,
+  treffer: Treffer | null,
+  schwelle = AEHNLICHKEITS_SCHWELLE,
+): Zuordnung {
+  if (explizit !== null) return { art: "explizit", geruecht_id: explizit, aehnlichkeit: null };
+  if (treffer && treffer.aehnlichkeit >= schwelle) {
+    return { art: "embedding", geruecht_id: treffer.geruecht_id, aehnlichkeit: treffer.aehnlichkeit };
+  }
+  return { art: "neu", geruecht_id: null, aehnlichkeit: null };
+}
+
 // --- Zugang ------------------------------------------------------------------
 
 // Vergleich in konstanter Zeit, damit die Antwortzeit nichts ueber den Schluessel verraet.
@@ -240,10 +329,31 @@ export const MELDUNGSSCHEMA = {
       type: ["integer", "null"],
       minimum: 1,
       description:
-        "Optional. Gesetzt: Meldung wird diesem bestehenden Gerücht zugeordnet (IDs aus GET /functions/v1/geruechte). " +
-        "Weggelassen: es entsteht ein neues Gerücht, die Kategorie vergibt danach der Klassifizierungs-Workflow.",
+        "Optional. Gesetzt: Meldung wird genau diesem bestehenden Gerücht zugeordnet (IDs aus GET /functions/v1/geruechte). " +
+        "Weggelassen: die Meldung wird per Embedding dem ähnlichsten bestehenden Gerücht zugeordnet, " +
+        `wenn die Kosinus-Ähnlichkeit mindestens ${AEHNLICHKEITS_SCHWELLE} beträgt. Sonst entsteht ein neues Gerücht, ` +
+        "die Kategorie vergibt danach der Klassifizierungs-Workflow.",
     },
   },
+};
+
+export const MELDUNG_ANTWORT_BEISPIEL = {
+  meldung_id: 12,
+  geruecht_id: 7,
+  neues_geruecht: false,
+  per_embedding_zugeordnet: true,
+  aehnlichkeit: 0.87,
+  embedding_fehler: null,
+};
+
+export const MELDUNG_ANTWORT_FELDER = {
+  meldung_id: "ID der gespeicherten Meldung",
+  geruecht_id: "Gerücht, dem die Meldung zugeordnet wurde",
+  neues_geruecht: "true, wenn dafür ein neues Gerücht angelegt wurde",
+  per_embedding_zugeordnet: "true, wenn die Zuordnung über die Ähnlichkeitssuche kam (nicht über geruecht_id)",
+  aehnlichkeit: "Kosinus-Ähnlichkeit zur ähnlichsten Meldung, nur bei per_embedding_zugeordnet, sonst null",
+  embedding_fehler: "null, wenn alles lief. Sonst der Grund, warum kein Embedding gespeichert oder nicht gesucht " +
+    "werden konnte. Die Meldung ist trotzdem gespeichert, ohne geruecht_id dann in einem neuen Gerücht.",
 };
 
 export interface Endpunkt {
@@ -296,11 +406,18 @@ export const ENDPUNKTE: Endpunkt[] = [
   ep({
     name: "meldung",
     methode: "POST",
-    beschreibung: "Speichert eine Meldung, legt bei Bedarf ein neues Gerücht an.",
+    beschreibung: "Speichert eine Meldung samt Embedding. Ohne geruecht_id wird sie per Ähnlichkeitssuche " +
+      "dem passenden bestehenden Gerücht zugeordnet, sonst entsteht ein neues. " +
+      "Antwort: meldung_id, geruecht_id, neues_geruecht, per_embedding_zugeordnet, aehnlichkeit, embedding_fehler.",
     parameter: [
       { name: "text", ort: "body", pflicht: true, beschreibung: "Meldungstext, Namen geschwärzt" },
       { name: "user_id", ort: "body", pflicht: false, beschreibung: "VORLÄUFIG, Kennung der Person" },
-      { name: "geruecht_id", ort: "body", pflicht: false, beschreibung: "bestehendes Gerücht, sonst neues" },
+      {
+        name: "geruecht_id",
+        ort: "body",
+        pflicht: false,
+        beschreibung: "erzwingt dieses bestehende Gerücht, sonst Zuordnung per Ähnlichkeitssuche",
+      },
     ],
   }),
   ep({

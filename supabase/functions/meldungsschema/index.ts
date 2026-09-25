@@ -1,6 +1,6 @@
 // GET /meldungsschema: Bauanleitung fuer POST /meldung.
 import { endpunkt, json } from "../_shared/http.ts";
-import { MELDUNG_BEISPIEL, MELDUNGSSCHEMA } from "../_shared/logik.ts";
+import { MELDUNG_ANTWORT_BEISPIEL, MELDUNG_ANTWORT_FELDER, MELDUNG_BEISPIEL, MELDUNGSSCHEMA } from "../_shared/logik.ts";
 
 Deno.serve(endpunkt("GET", () =>
   json(200, {
@@ -8,7 +8,8 @@ Deno.serve(endpunkt("GET", () =>
     header: { "Content-Type": "application/json", "x-api-key": "<euer Schlüssel>" },
     schema: MELDUNGSSCHEMA,
     beispiel: MELDUNG_BEISPIEL,
-    antwort_beispiel: { meldung_id: 12, geruecht_id: 7, neues_geruecht: true },
+    antwort_beispiel: MELDUNG_ANTWORT_BEISPIEL,
+    antwort_felder: MELDUNG_ANTWORT_FELDER,
     fehler: {
       "400": "Body ungültig oder unbekanntes Feld (auch 'kategorie'), Details in 'fehler'",
       "401": "x-api-key fehlt oder ist falsch",
