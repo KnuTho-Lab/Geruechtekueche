@@ -10,7 +10,7 @@ Deno.serve(endpunkt("GET", () =>
     beispiel: MELDUNG_BEISPIEL,
     antwort_beispiel: { meldung_id: 12, geruecht_id: 7, neues_geruecht: true },
     fehler: {
-      "400": "Body ungültig oder Kategorie unbekannt, Details in 'fehler'",
+      "400": "Body ungültig oder unbekanntes Feld (auch 'kategorie'), Details in 'fehler'",
       "401": "x-api-key fehlt oder ist falsch",
       "404": "geruecht_id angegeben, aber das Gerücht existiert nicht",
     },

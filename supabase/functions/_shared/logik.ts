@@ -33,14 +33,15 @@ export function parseGeruechtId(roh: unknown): Ergebnis<number> {
   return ok(zahl);
 }
 
+// Keine Kategorie: die vergibt ein eigener Klassifizierungs-Workflow, sobald ein
+// Geruecht entsteht.
 export interface MeldungEingabe {
   text: string;
-  kategorie: string;
   user_id: string | null;
   geruecht_id: number | null;
 }
 
-const MELDUNG_FELDER = ["text", "kategorie", "user_id", "geruecht_id"];
+const MELDUNG_FELDER = ["text", "user_id", "geruecht_id"];
 
 export function validiereMeldung(body: unknown): Ergebnis<MeldungEingabe> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -62,10 +63,6 @@ export function validiereMeldung(body: unknown): Ergebnis<MeldungEingabe> {
   else if (text === "") probleme.push("'text' darf nicht leer sein");
   else if (text.length > TEXT_MAX) probleme.push(`'text' ist länger als ${TEXT_MAX} Zeichen`);
 
-  const kategorie = typeof b.kategorie === "string" ? b.kategorie.trim() : null;
-  if (kategorie === null) probleme.push("'kategorie' fehlt oder ist kein Text");
-  else if (kategorie === "") probleme.push("'kategorie' darf nicht leer sein");
-
   let userId: string | null = null;
   if (b.user_id !== undefined && b.user_id !== null) {
     if (typeof b.user_id !== "string" || b.user_id.trim() === "" || b.user_id.length > USER_ID_MAX) {
@@ -84,7 +81,7 @@ export function validiereMeldung(body: unknown): Ergebnis<MeldungEingabe> {
   }
 
   if (probleme.length > 0) return { ok: false, fehler: probleme };
-  return ok({ text: text!, kategorie: kategorie!, user_id: userId, geruecht_id: geruechtId });
+  return ok({ text: text!, user_id: userId, geruecht_id: geruechtId });
 }
 
 // --- Zugang ------------------------------------------------------------------
@@ -145,7 +142,6 @@ export function baueGeruechtListe(zeilen: GeruechtZeile[]) {
 
 export const MELDUNG_BEISPIEL = {
   text: "Ich habe gehört, dass Abteilung X zum Jahresende aufgelöst wird.",
-  kategorie: "Organisation",
   user_id: "vorlaeufig-123",
 };
 
@@ -154,7 +150,7 @@ export const MELDUNGSSCHEMA = {
   title: "Meldung",
   description: "Body für POST /functions/v1/meldung",
   type: "object",
-  required: ["text", "kategorie"],
+  required: ["text"],
   additionalProperties: false,
   properties: {
     text: {
@@ -162,10 +158,6 @@ export const MELDUNGSSCHEMA = {
       minLength: 1,
       maxLength: TEXT_MAX,
       description: "Was die Person gehört hat, Namen bereits geschwärzt.",
-    },
-    kategorie: {
-      type: "string",
-      description: "Genau ein Name aus GET /functions/v1/kategorien.",
     },
     user_id: {
       type: ["string", "null"],
@@ -177,7 +169,7 @@ export const MELDUNGSSCHEMA = {
       minimum: 1,
       description:
         "Optional. Gesetzt: Meldung wird diesem bestehenden Gerücht zugeordnet (IDs aus GET /functions/v1/geruechte). " +
-        "Weggelassen: es entsteht ein neues Gerücht mit der angegebenen Kategorie.",
+        "Weggelassen: es entsteht ein neues Gerücht, die Kategorie vergibt danach der Klassifizierungs-Workflow.",
     },
   },
 };
@@ -202,13 +194,14 @@ export const ENDPUNKTE: Endpunkt[] = [
   ep({
     name: "kategorien",
     methode: "GET",
-    beschreibung: "Alle erlaubten Kategorien, die Namen gehen so in POST meldung.",
+    beschreibung: "Alle Kategorien, die der Klassifizierungs-Workflow vergeben kann.",
     parameter: [],
   }),
   ep({
     name: "geruechte",
     methode: "GET",
-    beschreibung: "Gerüchte mit Kategorie, Status, Anzahl Meldungen und Beispieltext (erste Meldung).",
+    beschreibung:
+      "Gerüchte mit Kategorie (null = noch nicht klassifiziert), Status, Anzahl Meldungen und Beispieltext (erste Meldung).",
     parameter: [{
       name: "status",
       ort: "query",
@@ -234,7 +227,6 @@ export const ENDPUNKTE: Endpunkt[] = [
     beschreibung: "Speichert eine Meldung, legt bei Bedarf ein neues Gerücht an.",
     parameter: [
       { name: "text", ort: "body", pflicht: true, beschreibung: "Meldungstext, Namen geschwärzt" },
-      { name: "kategorie", ort: "body", pflicht: true, beschreibung: "Name aus GET kategorien" },
       { name: "user_id", ort: "body", pflicht: false, beschreibung: "VORLÄUFIG, Kennung der Person" },
       { name: "geruecht_id", ort: "body", pflicht: false, beschreibung: "bestehendes Gerücht, sonst neues" },
     ],

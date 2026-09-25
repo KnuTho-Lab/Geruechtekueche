@@ -1,5 +1,6 @@
 // POST /meldung: speichert eine Meldung. Mit geruecht_id wird sie diesem Geruecht
-// zugeordnet, ohne entsteht zuerst ein neues Geruecht mit der angegebenen Kategorie.
+// zugeordnet, ohne entsteht zuerst ein neues, noch nicht klassifiziertes Geruecht.
+// Die Kategorie vergibt danach ein eigener Klassifizierungs-Workflow.
 // Spaeter uebernimmt hier der Vektorvergleich die Zuordnung.
 import { db } from "../_shared/db.ts";
 import { endpunkt, json } from "../_shared/http.ts";
@@ -16,18 +17,6 @@ Deno.serve(endpunkt("POST", async (req) => {
   if (!eingabe.ok) return json(400, { fehler: eingabe.fehler });
   const m = eingabe.wert;
 
-  // Kategorie per Name nachschlagen, das Backend vertraut dem Agenten nicht blind
-  const kat = await db().from("kategorien").select("kategorie_id").eq("name", m.kategorie).maybeSingle();
-  if (kat.error) throw kat.error;
-  if (!kat.data) {
-    const alle = await db().from("kategorien").select("name").order("kategorie_id");
-    if (alle.error) throw alle.error;
-    return json(400, {
-      fehler: [`Unbekannte Kategorie '${m.kategorie}'`],
-      gueltige_kategorien: alle.data.map((z) => z.name),
-    });
-  }
-
   let geruechtId: number;
   let neuesGeruecht = false;
   if (m.geruecht_id !== null) {
@@ -36,11 +25,8 @@ Deno.serve(endpunkt("POST", async (req) => {
     if (!g.data) return json(404, { fehler: [`Gerücht ${m.geruecht_id} existiert nicht`] });
     geruechtId = m.geruecht_id;
   } else {
-    const neu = await db()
-      .from("geruechte")
-      .insert({ kategorie_id: kat.data.kategorie_id })
-      .select("geruecht_id")
-      .single();
+    // kategorie_id bleibt leer, Status startet per Standardwert als 'offen'
+    const neu = await db().from("geruechte").insert({ kategorie_id: null }).select("geruecht_id").single();
     if (neu.error) throw neu.error;
     geruechtId = neu.data.geruecht_id;
     neuesGeruecht = true;

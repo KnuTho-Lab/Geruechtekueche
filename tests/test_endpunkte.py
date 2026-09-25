@@ -64,7 +64,7 @@ class EndpunkteTest(unittest.TestCase):
             os.unlink(pfad)
 
     def neue_meldung(self, **felder):
-        body = {"kategorie": "Personal", **felder}
+        body = dict(felder)
         body["text"] = "[TEST] " + body.get("text", "Integrationstest")
         status, antwort = aufruf("POST", "meldung", body)
         self.assertEqual(status, 201, antwort)
@@ -102,7 +102,7 @@ class EndpunkteTest(unittest.TestCase):
     def test_meldungsschema(self):
         status, a = aufruf("GET", "meldungsschema")
         self.assertEqual(status, 200)
-        self.assertEqual(a["schema"]["required"], ["text", "kategorie"])
+        self.assertEqual(a["schema"]["required"], ["text"])
 
     def test_geruechte_status_pflicht_und_geprueft(self):
         self.assertEqual(aufruf("GET", "geruechte")[0], 400)
@@ -120,16 +120,17 @@ class EndpunkteTest(unittest.TestCase):
 
     def test_meldung_ungueltige_eingaben_400(self):
         self.assertEqual(aufruf("POST", "meldung", roh=b"{kein json")[0], 400)
-        status, a = aufruf("POST", "meldung", {"text": "[TEST] x", "kategorie": "Gibtsnicht"})
+        # Kategorie gehoert nicht mehr in die Meldung, die vergibt der Klassifizierungs-Workflow
+        status, a = aufruf("POST", "meldung", {"text": "[TEST] x", "kategorie": "Personal"})
         self.assertEqual(status, 400)
-        self.assertIn("Personal", a["gueltige_kategorien"])
-        status, a = aufruf("POST", "meldung", {"text": "[TEST] x", "kategorie": "Personal", "geruechte_id": 1})
+        self.assertIn("kategorie", a["fehler"][0])
+        status, a = aufruf("POST", "meldung", {"text": "[TEST] x", "geruechte_id": 1})
         self.assertEqual(status, 400)
         self.assertIn("geruechte_id", a["fehler"][0])
 
     def test_meldung_unbekanntes_geruecht_404(self):
         status, _ = aufruf("POST", "meldung",
-                           {"text": "[TEST] x", "kategorie": "Personal", "geruecht_id": 999999999})
+                           {"text": "[TEST] x", "geruecht_id": 999999999})
         self.assertEqual(status, 404)
 
     def test_durchstich_neues_geruecht_dann_zuordnen(self):
@@ -148,7 +149,7 @@ class EndpunkteTest(unittest.TestCase):
         self.assertEqual(status, 200)
         eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == gid)
         self.assertEqual(eintrag["anzahl_meldungen"], 2)
-        self.assertEqual(eintrag["kategorie"], "Personal")
+        self.assertIsNone(eintrag["kategorie"])  # noch nicht klassifiziert
         self.assertEqual(eintrag["beispieltext"], "[TEST] Abteilung X wird aufgelöst")
 
 

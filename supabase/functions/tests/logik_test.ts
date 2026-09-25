@@ -61,21 +61,20 @@ Deno.test("geruecht_id: ungueltige Werte", () => {
 
 // --- validiereMeldung --------------------------------------------------------
 
-Deno.test("meldung: Minimalfall text + kategorie", () => {
-  assertEquals(validiereMeldung({ text: "X wird aufgelöst", kategorie: "Organisation" }), {
+Deno.test("meldung: Minimalfall nur text", () => {
+  assertEquals(validiereMeldung({ text: "X wird aufgelöst" }), {
     ok: true,
-    wert: { text: "X wird aufgelöst", kategorie: "Organisation", user_id: null, geruecht_id: null },
+    wert: { text: "X wird aufgelöst", user_id: null, geruecht_id: null },
   });
 });
 
 Deno.test("meldung: alle Felder, Text wird getrimmt", () => {
-  const e = validiereMeldung({ text: "  X  ", kategorie: " Personal ", user_id: "u1", geruecht_id: 3 });
-  assertEquals(e, { ok: true, wert: { text: "X", kategorie: "Personal", user_id: "u1", geruecht_id: 3 } });
+  const e = validiereMeldung({ text: "  X  ", user_id: "u1", geruecht_id: 3 });
+  assertEquals(e, { ok: true, wert: { text: "X", user_id: "u1", geruecht_id: 3 } });
 });
 
 Deno.test("meldung: null bei optionalen Feldern ist erlaubt", () => {
-  const e = validiereMeldung({ text: "X", kategorie: "Personal", user_id: null, geruecht_id: null });
-  assert(e.ok);
+  assert(validiereMeldung({ text: "X", user_id: null, geruecht_id: null }).ok);
 });
 
 Deno.test("meldung: kein Objekt -> Fehler", () => {
@@ -84,32 +83,36 @@ Deno.test("meldung: kein Objekt -> Fehler", () => {
   }
 });
 
-Deno.test("meldung: Pflichtfelder fehlen -> beide Fehler gesammelt", () => {
+Deno.test("meldung: Text fehlt -> Fehler", () => {
   const e = validiereMeldung({});
   assert(!e.ok);
-  assertEquals(e.fehler.length, 2);
+  assertEquals(e.fehler.length, 1);
 });
 
-Deno.test("meldung: leerer Text und leere Kategorie -> Fehler", () => {
-  assert(!validiereMeldung({ text: "   ", kategorie: "Personal" }).ok);
-  assert(!validiereMeldung({ text: "X", kategorie: "" }).ok);
+Deno.test("meldung: leerer Text -> Fehler", () => {
+  assert(!validiereMeldung({ text: "   " }).ok);
 });
 
 Deno.test("meldung: Text zu lang -> Fehler, Grenze selbst ist erlaubt", () => {
-  assert(validiereMeldung({ text: "a".repeat(TEXT_MAX), kategorie: "Personal" }).ok);
-  assert(!validiereMeldung({ text: "a".repeat(TEXT_MAX + 1), kategorie: "Personal" }).ok);
+  assert(validiereMeldung({ text: "a".repeat(TEXT_MAX) }).ok);
+  assert(!validiereMeldung({ text: "a".repeat(TEXT_MAX + 1) }).ok);
 });
 
 Deno.test("meldung: falsche Typen -> Fehler", () => {
-  assert(!validiereMeldung({ text: 5, kategorie: "Personal" }).ok);
-  assert(!validiereMeldung({ text: "X", kategorie: 2 }).ok);
-  assert(!validiereMeldung({ text: "X", kategorie: "Personal", user_id: 12 }).ok);
-  assert(!validiereMeldung({ text: "X", kategorie: "Personal", geruecht_id: "sieben" }).ok);
+  assert(!validiereMeldung({ text: 5 }).ok);
+  assert(!validiereMeldung({ text: "X", user_id: 12 }).ok);
+  assert(!validiereMeldung({ text: "X", geruecht_id: "sieben" }).ok);
+});
+
+Deno.test("meldung: Kategorie wird abgelehnt, die vergibt der Klassifizierungs-Workflow", () => {
+  const e = validiereMeldung({ text: "X", kategorie: "Personal" });
+  assert(!e.ok);
+  assert(e.fehler[0].includes("kategorie"));
 });
 
 Deno.test("meldung: Tippfehler im Feldnamen wird abgelehnt statt ignoriert", () => {
   // geruechte_id statt geruecht_id wuerde sonst still ein neues Geruecht anlegen
-  const e = validiereMeldung({ text: "X", kategorie: "Personal", geruechte_id: 7 });
+  const e = validiereMeldung({ text: "X", geruechte_id: 7 });
   assert(!e.ok);
   assert(e.fehler[0].includes("geruechte_id"));
 });
@@ -196,6 +199,14 @@ Deno.test("liste: Anzahl und Beispieltext aus der fruehesten Meldung", () => {
     beispieltext: "zuerst",
     erste_meldung_am: "2026-09-25T10:00:00+00:00",
   }]);
+});
+
+Deno.test("liste: noch nicht klassifiziertes Geruecht hat Kategorie null", () => {
+  const liste = baueGeruechtListe([
+    { geruecht_id: 2, status: "offen", kategorien: null, meldungen: [{ text: "a", eingegangen_am: "2026-09-25T10:00:00+00:00" }] },
+  ]);
+  assertEquals(liste[0].kategorie, null);
+  assertEquals(liste[0].anzahl_meldungen, 1);
 });
 
 Deno.test("liste: Geruecht ohne Meldungen und Kategorie als Array", () => {
