@@ -4,12 +4,14 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   baueGeruechtListe,
   ENDPUNKTE,
+  KERNAUSSAGE_MAX,
   MELDUNG_BEISPIEL,
   parseGeruechtId,
   parseStatusFilter,
   pruefeApiKey,
   STATUS_WERTE,
   TEXT_MAX,
+  validiereKlassifizierung,
   validiereMeldung,
   waehleAdminKey,
 } from "../_shared/logik.ts";
@@ -121,6 +123,42 @@ Deno.test("meldung: das Beispiel aus dem Schema ist selbst gueltig", () => {
   assert(validiereMeldung(MELDUNG_BEISPIEL).ok);
 });
 
+// --- validiereKlassifizierung -----------------------------------------------
+
+Deno.test("klassifizierung: gueltig, Texte werden getrimmt", () => {
+  assertEquals(
+    validiereKlassifizierung({ geruecht_id: 7, kategorie: " Organisation ", kernaussage: " Abteilung X wird aufgelöst. " }),
+    { ok: true, wert: { geruecht_id: 7, kategorie: "Organisation", kernaussage: "Abteilung X wird aufgelöst." } },
+  );
+});
+
+Deno.test("klassifizierung: alle drei Felder sind Pflicht, Fehler gesammelt", () => {
+  const e = validiereKlassifizierung({});
+  assert(!e.ok);
+  assertEquals(e.fehler.length, 3);
+});
+
+Deno.test("klassifizierung: leere oder falsche Werte -> Fehler", () => {
+  const basis = { geruecht_id: 7, kategorie: "Organisation", kernaussage: "X" };
+  assert(!validiereKlassifizierung({ ...basis, geruecht_id: "7" }).ok);
+  assert(!validiereKlassifizierung({ ...basis, geruecht_id: 0 }).ok);
+  assert(!validiereKlassifizierung({ ...basis, kategorie: "" }).ok);
+  assert(!validiereKlassifizierung({ ...basis, kategorie: null }).ok);
+  assert(!validiereKlassifizierung({ ...basis, kernaussage: "   " }).ok);
+  assert(!validiereKlassifizierung({ ...basis, kernaussage: "a".repeat(KERNAUSSAGE_MAX + 1) }).ok);
+  assert(validiereKlassifizierung({ ...basis, kernaussage: "a".repeat(KERNAUSSAGE_MAX) }).ok);
+});
+
+Deno.test("klassifizierung: unbekannte Felder werden abgelehnt", () => {
+  const e = validiereKlassifizierung({ geruecht_id: 7, kategorie: "Organisation", kernaussage: "X", konfidenz: 0.9 });
+  assert(!e.ok);
+  assert(e.fehler[0].includes("konfidenz"));
+});
+
+Deno.test("klassifizierung: kein Objekt -> Fehler", () => {
+  for (const body of [null, "x", 3, []]) assert(!validiereKlassifizierung(body).ok);
+});
+
 // --- pruefeApiKey ------------------------------------------------------------
 
 Deno.test("api-key: korrekter Schluessel", () => {
@@ -184,6 +222,7 @@ Deno.test("liste: Anzahl und Beispieltext aus der fruehesten Meldung", () => {
     {
       geruecht_id: 7,
       status: "offen",
+      kernaussage: "Abteilung X wird aufgelöst.",
       kategorien: { name: "Organisation" },
       meldungen: [
         { text: "spaeter", eingegangen_am: "2026-09-25T12:00:00+00:00" },
@@ -194,6 +233,7 @@ Deno.test("liste: Anzahl und Beispieltext aus der fruehesten Meldung", () => {
   assertEquals(liste, [{
     geruecht_id: 7,
     kategorie: "Organisation",
+    kernaussage: "Abteilung X wird aufgelöst.",
     status: "offen",
     anzahl_meldungen: 2,
     beispieltext: "zuerst",
@@ -203,15 +243,16 @@ Deno.test("liste: Anzahl und Beispieltext aus der fruehesten Meldung", () => {
 
 Deno.test("liste: noch nicht klassifiziertes Geruecht hat Kategorie null", () => {
   const liste = baueGeruechtListe([
-    { geruecht_id: 2, status: "offen", kategorien: null, meldungen: [{ text: "a", eingegangen_am: "2026-09-25T10:00:00+00:00" }] },
+    { geruecht_id: 2, status: "offen", kernaussage: null, kategorien: null, meldungen: [{ text: "a", eingegangen_am: "2026-09-25T10:00:00+00:00" }] },
   ]);
   assertEquals(liste[0].kategorie, null);
+  assertEquals(liste[0].kernaussage, null);
   assertEquals(liste[0].anzahl_meldungen, 1);
 });
 
 Deno.test("liste: Geruecht ohne Meldungen und Kategorie als Array", () => {
   const liste = baueGeruechtListe([
-    { geruecht_id: 1, status: "widerlegt", kategorien: [{ name: "Standort" }], meldungen: [] },
+    { geruecht_id: 1, status: "widerlegt", kernaussage: null, kategorien: [{ name: "Standort" }], meldungen: [] },
   ]);
   assertEquals(liste[0].kategorie, "Standort");
   assertEquals(liste[0].anzahl_meldungen, 0);

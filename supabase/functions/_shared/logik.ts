@@ -84,6 +84,46 @@ export function validiereMeldung(body: unknown): Ergebnis<MeldungEingabe> {
   return ok({ text: text!, user_id: userId, geruecht_id: geruechtId });
 }
 
+export const KERNAUSSAGE_MAX = 500;
+
+export interface KlassifizierungEingabe {
+  geruecht_id: number;
+  kategorie: string;
+  kernaussage: string;
+}
+
+const KLASSIFIZIERUNG_FELDER = ["geruecht_id", "kategorie", "kernaussage"];
+
+export function validiereKlassifizierung(body: unknown): Ergebnis<KlassifizierungEingabe> {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return fehler("Der Body muss ein JSON-Objekt sein");
+  }
+  const b = body as Record<string, unknown>;
+  const probleme: string[] = [];
+
+  for (const feld of Object.keys(b)) {
+    if (!KLASSIFIZIERUNG_FELDER.includes(feld)) {
+      probleme.push(`Unbekanntes Feld '${feld}'. Erlaubt: ${KLASSIFIZIERUNG_FELDER.join(", ")}`);
+    }
+  }
+
+  // Im JSON-Body nur als Zahl, nicht als Text
+  const id = typeof b.geruecht_id === "number" ? parseGeruechtId(b.geruecht_id) : parseGeruechtId(null);
+  if (!id.ok) probleme.push(...id.fehler);
+
+  const kategorie = typeof b.kategorie === "string" ? b.kategorie.trim() : "";
+  if (kategorie === "") probleme.push("'kategorie' fehlt oder ist leer");
+
+  const kernaussage = typeof b.kernaussage === "string" ? b.kernaussage.trim() : "";
+  if (kernaussage === "") probleme.push("'kernaussage' fehlt oder ist leer");
+  else if (kernaussage.length > KERNAUSSAGE_MAX) {
+    probleme.push(`'kernaussage' ist länger als ${KERNAUSSAGE_MAX} Zeichen`);
+  }
+
+  if (probleme.length > 0 || !id.ok) return { ok: false, fehler: probleme };
+  return ok({ geruecht_id: id.wert, kategorie, kernaussage });
+}
+
 // --- Zugang ------------------------------------------------------------------
 
 // Vergleich in konstanter Zeit, damit die Antwortzeit nichts ueber den Schluessel verraet.
@@ -117,6 +157,7 @@ export function waehleAdminKey(legacy: string | undefined, secretKeysJson: strin
 interface GeruechtZeile {
   geruecht_id: number;
   status: string;
+  kernaussage: string | null;
   kategorien: { name: string } | { name: string }[] | null;
   meldungen: { text: string; eingegangen_am: string }[] | null;
 }
@@ -130,6 +171,7 @@ export function baueGeruechtListe(zeilen: GeruechtZeile[]) {
     return {
       geruecht_id: z.geruecht_id,
       kategorie: kat?.name ?? null,
+      kernaussage: z.kernaussage,
       status: z.status,
       anzahl_meldungen: meldungen.length,
       beispieltext: meldungen[0]?.text ?? null,
@@ -200,8 +242,8 @@ export const ENDPUNKTE: Endpunkt[] = [
   ep({
     name: "geruechte",
     methode: "GET",
-    beschreibung:
-      "Gerüchte mit Kategorie (null = noch nicht klassifiziert), Status, Anzahl Meldungen und Beispieltext (erste Meldung).",
+    beschreibung: "Gerüchte mit Kategorie und Kernaussage (beide null = noch nicht klassifiziert), " +
+      "Status, Anzahl Meldungen und Beispieltext (erste Meldung).",
     parameter: [{
       name: "status",
       ort: "query",
@@ -229,6 +271,22 @@ export const ENDPUNKTE: Endpunkt[] = [
       { name: "text", ort: "body", pflicht: true, beschreibung: "Meldungstext, Namen geschwärzt" },
       { name: "user_id", ort: "body", pflicht: false, beschreibung: "VORLÄUFIG, Kennung der Person" },
       { name: "geruecht_id", ort: "body", pflicht: false, beschreibung: "bestehendes Gerücht, sonst neues" },
+    ],
+  }),
+  ep({
+    name: "klassifizierung_setzen",
+    methode: "POST",
+    beschreibung: "Für den Klassifizierungs-Workflow: setzt Kategorie und Kernaussage eines Gerüchts. " +
+      "Nur einmal möglich, ein bereits klassifiziertes Gerücht liefert 409.",
+    parameter: [
+      { name: "geruecht_id", ort: "body", pflicht: true, beschreibung: "aus dem Trigger-Aufruf" },
+      { name: "kategorie", ort: "body", pflicht: true, beschreibung: "Name aus GET kategorien" },
+      {
+        name: "kernaussage",
+        ort: "body",
+        pflicht: true,
+        beschreibung: `neutral formuliert, höchstens ${KERNAUSSAGE_MAX} Zeichen`,
+      },
     ],
   }),
 ];

@@ -9,7 +9,7 @@ Deno.serve(endpunkt("GET", async (req) => {
 
   let abfrage = db()
     .from("geruechte")
-    .select("geruecht_id, status, kategorien(name), meldungen(text, eingegangen_am)")
+    .select("geruecht_id, status, kernaussage, kategorien(name), meldungen(text, eingegangen_am)")
     .order("geruecht_id");
   if (filter.wert !== "all") abfrage = abfrage.eq("status", filter.wert);
 

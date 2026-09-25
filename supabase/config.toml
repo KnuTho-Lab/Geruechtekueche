@@ -433,3 +433,6 @@ verify_jwt = false
 
 [functions.meldung]
 verify_jwt = false
+
+[functions.klassifizierung_setzen]
+verify_jwt = false

@@ -77,7 +77,8 @@ class EndpunkteTest(unittest.TestCase):
 
     def test_ohne_oder_mit_falschem_schluessel_401(self):
         for name, methode in [("calls", "GET"), ("kategorien", "GET"), ("geruechte", "GET"),
-                              ("status", "GET"), ("meldungsschema", "GET"), ("meldung", "POST")]:
+                              ("status", "GET"), ("meldungsschema", "GET"), ("meldung", "POST"),
+                              ("klassifizierung_setzen", "POST")]:
             with self.subTest(name=name):
                 self.assertEqual(aufruf(methode, name, key=None)[0], 401)
                 self.assertEqual(aufruf(methode, name, key="falsch")[0], 401)
@@ -88,11 +89,12 @@ class EndpunkteTest(unittest.TestCase):
 
     # --- Lesende Endpunkte ----------------------------------------------------
 
-    def test_calls_listet_alle_sechs(self):
+    def test_calls_listet_alle_endpunkte(self):
         status, a = aufruf("GET", "calls")
         self.assertEqual(status, 200)
         self.assertEqual(sorted(e["name"] for e in a["endpunkte"]),
-                         ["calls", "geruechte", "kategorien", "meldung", "meldungsschema", "status"])
+                         ["calls", "geruechte", "kategorien", "klassifizierung_setzen", "meldung",
+                          "meldungsschema", "status"])
 
     def test_kategorien(self):
         status, a = aufruf("GET", "kategorien")
@@ -152,6 +154,41 @@ class EndpunkteTest(unittest.TestCase):
         self.assertIsNone(eintrag["kategorie"])  # noch nicht klassifiziert
         self.assertEqual(eintrag["beispieltext"], "[TEST] Abteilung X wird aufgelöst")
 
+
+    # --- POST klassifizierung_setzen -----------------------------------------
+
+    def test_klassifizierung_setzen_einmalig(self):
+        gid = self.neue_meldung(text="Kantinenpreise steigen ab Januar")["geruecht_id"]
+        body = {"geruecht_id": gid, "kategorie": "Standort", "kernaussage": "[TEST] Kantinenpreise steigen."}
+
+        status, a = aufruf("POST", "klassifizierung_setzen", body)
+        self.assertEqual(status, 200, a)
+        self.assertEqual(a["kategorie"], "Standort")
+
+        status, a = aufruf("GET", "geruechte", query={"status": "all"})
+        eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == gid)
+        self.assertEqual(eintrag["kategorie"], "Standort")
+        self.assertEqual(eintrag["kernaussage"], "[TEST] Kantinenpreise steigen.")
+
+        # Zweites Setzen wird abgelehnt, nichts wird ueberschrieben
+        status, _ = aufruf("POST", "klassifizierung_setzen", {**body, "kategorie": "Personal"})
+        self.assertEqual(status, 409)
+        status, a = aufruf("GET", "geruechte", query={"status": "all"})
+        eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == gid)
+        self.assertEqual(eintrag["kategorie"], "Standort")
+
+    def test_klassifizierung_setzen_fehlerfaelle(self):
+        status, a = aufruf("POST", "klassifizierung_setzen",
+                           {"geruecht_id": 999999999, "kategorie": "Gibtsnicht", "kernaussage": "x"})
+        self.assertEqual(status, 400)
+        self.assertIn("Standort", a["gueltige_kategorien"])
+        status, _ = aufruf("POST", "klassifizierung_setzen",
+                           {"geruecht_id": 999999999, "kategorie": "Standort", "kernaussage": "x"})
+        self.assertEqual(status, 404)
+        status, a = aufruf("POST", "klassifizierung_setzen",
+                           {"geruecht_id": 1, "kategorie": "Standort", "kernaussage": "x", "konfidenz": 0.9})
+        self.assertEqual(status, 400)
+        self.assertIn("konfidenz", a["fehler"][0])
 
 if __name__ == "__main__":
     unittest.main()
