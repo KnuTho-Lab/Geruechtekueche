@@ -31,7 +31,13 @@ Deno.serve(endpunkt("POST", async (req) => {
   // Bedingtes Update in einem Schritt: greift nur, solange noch keine Kategorie gesetzt ist
   const upd = await db()
     .from("geruechte")
-    .update({ kategorie_id: kat.data.kategorie_id, kernaussage: k.kernaussage })
+    .update({
+      kategorie_id: kat.data.kategorie_id,
+      kernaussage: k.kernaussage,
+      kategorie_konfidenz: k.konfidenz,
+      kategorie_begruendung: k.begruendung,
+      manuell_pruefen: k.manuell_pruefen,
+    })
     .eq("geruecht_id", k.geruecht_id)
     .is("kategorie_id", null)
     .select("geruecht_id");
@@ -44,5 +50,5 @@ Deno.serve(endpunkt("POST", async (req) => {
     return json(409, { fehler: [`Gerücht ${k.geruecht_id} ist bereits klassifiziert`] });
   }
 
-  return json(200, { geruecht_id: k.geruecht_id, kategorie: k.kategorie, kernaussage: k.kernaussage });
+  return json(200, k);
 }));

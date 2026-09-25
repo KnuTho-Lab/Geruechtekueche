@@ -85,14 +85,20 @@ export function validiereMeldung(body: unknown): Ergebnis<MeldungEingabe> {
 }
 
 export const KERNAUSSAGE_MAX = 500;
+export const BEGRUENDUNG_MAX = 1000;
 
+// konfidenz, begruendung und manuell_pruefen sind optional und werden vorerst nur
+// mitprotokolliert.
 export interface KlassifizierungEingabe {
   geruecht_id: number;
   kategorie: string;
   kernaussage: string;
+  konfidenz: number | null;
+  begruendung: string | null;
+  manuell_pruefen: boolean;
 }
 
-const KLASSIFIZIERUNG_FELDER = ["geruecht_id", "kategorie", "kernaussage"];
+const KLASSIFIZIERUNG_FELDER = ["geruecht_id", "kategorie", "kernaussage", "konfidenz", "begruendung", "manuell_pruefen"];
 
 export function validiereKlassifizierung(body: unknown): Ergebnis<KlassifizierungEingabe> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -120,8 +126,32 @@ export function validiereKlassifizierung(body: unknown): Ergebnis<Klassifizierun
     probleme.push(`'kernaussage' ist länger als ${KERNAUSSAGE_MAX} Zeichen`);
   }
 
+  let konfidenz: number | null = null;
+  if (b.konfidenz !== undefined && b.konfidenz !== null) {
+    if (typeof b.konfidenz !== "number" || !Number.isFinite(b.konfidenz) || b.konfidenz < 0 || b.konfidenz > 1) {
+      probleme.push("'konfidenz' muss eine Zahl zwischen 0 und 1 sein");
+    } else {
+      konfidenz = b.konfidenz;
+    }
+  }
+
+  let begruendung: string | null = null;
+  if (b.begruendung !== undefined && b.begruendung !== null) {
+    if (typeof b.begruendung !== "string" || b.begruendung.length > BEGRUENDUNG_MAX) {
+      probleme.push(`'begruendung' muss ein Text mit höchstens ${BEGRUENDUNG_MAX} Zeichen sein`);
+    } else {
+      begruendung = b.begruendung.trim() || null;
+    }
+  }
+
+  let manuellPruefen = false;
+  if (b.manuell_pruefen !== undefined && b.manuell_pruefen !== null) {
+    if (typeof b.manuell_pruefen !== "boolean") probleme.push("'manuell_pruefen' muss true oder false sein");
+    else manuellPruefen = b.manuell_pruefen;
+  }
+
   if (probleme.length > 0 || !id.ok) return { ok: false, fehler: probleme };
-  return ok({ geruecht_id: id.wert, kategorie, kernaussage });
+  return ok({ geruecht_id: id.wert, kategorie, kernaussage, konfidenz, begruendung, manuell_pruefen: manuellPruefen });
 }
 
 // --- Zugang ------------------------------------------------------------------
@@ -287,6 +317,14 @@ export const ENDPUNKTE: Endpunkt[] = [
         pflicht: true,
         beschreibung: `neutral formuliert, höchstens ${KERNAUSSAGE_MAX} Zeichen`,
       },
+      { name: "konfidenz", ort: "body", pflicht: false, beschreibung: "0 bis 1, wird mitprotokolliert" },
+      {
+        name: "begruendung",
+        ort: "body",
+        pflicht: false,
+        beschreibung: `höchstens ${BEGRUENDUNG_MAX} Zeichen, wird mitprotokolliert`,
+      },
+      { name: "manuell_pruefen", ort: "body", pflicht: false, beschreibung: "true/false, Standard false" },
     ],
   }),
 ];

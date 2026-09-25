@@ -3,6 +3,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   baueGeruechtListe,
+  BEGRUENDUNG_MAX,
   ENDPUNKTE,
   KERNAUSSAGE_MAX,
   MELDUNG_BEISPIEL,
@@ -125,11 +126,43 @@ Deno.test("meldung: das Beispiel aus dem Schema ist selbst gueltig", () => {
 
 // --- validiereKlassifizierung -----------------------------------------------
 
-Deno.test("klassifizierung: gueltig, Texte werden getrimmt", () => {
+Deno.test("klassifizierung: Minimalfall, Texte getrimmt, Protokollfelder mit Standardwerten", () => {
   assertEquals(
     validiereKlassifizierung({ geruecht_id: 7, kategorie: " Organisation ", kernaussage: " Abteilung X wird aufgelöst. " }),
-    { ok: true, wert: { geruecht_id: 7, kategorie: "Organisation", kernaussage: "Abteilung X wird aufgelöst." } },
+    {
+      ok: true,
+      wert: {
+        geruecht_id: 7,
+        kategorie: "Organisation",
+        kernaussage: "Abteilung X wird aufgelöst.",
+        konfidenz: null,
+        begruendung: null,
+        manuell_pruefen: false,
+      },
+    },
   );
+});
+
+Deno.test("klassifizierung: Protokollfelder werden uebernommen", () => {
+  const e = validiereKlassifizierung({
+    geruecht_id: 7, kategorie: "Organisation", kernaussage: "X",
+    konfidenz: 0.42, begruendung: " passt ", manuell_pruefen: true,
+  });
+  assert(e.ok);
+  assertEquals([e.wert.konfidenz, e.wert.begruendung, e.wert.manuell_pruefen], [0.42, "passt", true]);
+});
+
+Deno.test("klassifizierung: Protokollfelder ungueltig -> Fehler, Grenzen erlaubt", () => {
+  const basis = { geruecht_id: 7, kategorie: "Organisation", kernaussage: "X" };
+  assert(validiereKlassifizierung({ ...basis, konfidenz: 0 }).ok);
+  assert(validiereKlassifizierung({ ...basis, konfidenz: 1 }).ok);
+  assert(validiereKlassifizierung({ ...basis, konfidenz: null, begruendung: null, manuell_pruefen: null }).ok);
+  assert(!validiereKlassifizierung({ ...basis, konfidenz: 1.1 }).ok);
+  assert(!validiereKlassifizierung({ ...basis, konfidenz: -0.1 }).ok);
+  assert(!validiereKlassifizierung({ ...basis, konfidenz: "0.9" }).ok);
+  assert(!validiereKlassifizierung({ ...basis, begruendung: 5 }).ok);
+  assert(!validiereKlassifizierung({ ...basis, begruendung: "a".repeat(BEGRUENDUNG_MAX + 1) }).ok);
+  assert(!validiereKlassifizierung({ ...basis, manuell_pruefen: "ja" }).ok);
 });
 
 Deno.test("klassifizierung: alle drei Felder sind Pflicht, Fehler gesammelt", () => {
@@ -150,9 +183,9 @@ Deno.test("klassifizierung: leere oder falsche Werte -> Fehler", () => {
 });
 
 Deno.test("klassifizierung: unbekannte Felder werden abgelehnt", () => {
-  const e = validiereKlassifizierung({ geruecht_id: 7, kategorie: "Organisation", kernaussage: "X", konfidenz: 0.9 });
+  const e = validiereKlassifizierung({ geruecht_id: 7, kategorie: "Organisation", kernaussage: "X", sicherheit: 0.9 });
   assert(!e.ok);
-  assert(e.fehler[0].includes("konfidenz"));
+  assert(e.fehler[0].includes("sicherheit"));
 });
 
 Deno.test("klassifizierung: kein Objekt -> Fehler", () => {

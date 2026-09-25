@@ -20,6 +20,22 @@ KEY = os.environ.get("GERUECHTE_API_KEY", "")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def sql(abfrage):
+    """Fuehrt eine Abfrage per Supabase-CLI auf der verknuepften DB aus, liefert die Zeilen."""
+    with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False, encoding="utf-8") as f:
+        f.write(abfrage)
+        pfad = f.name
+    try:
+        r = subprocess.run(
+            ["npx", "supabase", "db", "query", "--linked", "--file", pfad],
+            cwd=REPO, check=True, capture_output=True, text=True, encoding="utf-8",
+            shell=os.name == "nt", timeout=180,
+        )
+    finally:
+        os.unlink(pfad)
+    return json.loads(r.stdout[r.stdout.index("{"):])["rows"]
+
+
 def aufruf(methode, pfad, body=None, key=KEY, roh=None, query=None):
     url = f"{BASE}/{pfad}"
     if query:
@@ -159,7 +175,8 @@ class EndpunkteTest(unittest.TestCase):
 
     def test_klassifizierung_setzen_einmalig(self):
         gid = self.neue_meldung(text="Kantinenpreise steigen ab Januar")["geruecht_id"]
-        body = {"geruecht_id": gid, "kategorie": "Standort", "kernaussage": "[TEST] Kantinenpreise steigen."}
+        body = {"geruecht_id": gid, "kategorie": "Standort", "kernaussage": "[TEST] Kantinenpreise steigen.",
+                "konfidenz": 0.83, "begruendung": "Betrifft die Kantine am Standort.", "manuell_pruefen": True}
 
         status, a = aufruf("POST", "klassifizierung_setzen", body)
         self.assertEqual(status, 200, a)
@@ -169,6 +186,13 @@ class EndpunkteTest(unittest.TestCase):
         eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == gid)
         self.assertEqual(eintrag["kategorie"], "Standort")
         self.assertEqual(eintrag["kernaussage"], "[TEST] Kantinenpreise steigen.")
+
+        # Protokollfelder liegen in der Datenbank (ueber die API nicht sichtbar)
+        zeile = sql(f"select kategorie_konfidenz, kategorie_begruendung, manuell_pruefen "
+                    f"from geruechte where geruecht_id = {int(gid)};")[0]
+        self.assertEqual(float(zeile["kategorie_konfidenz"]), 0.83)
+        self.assertEqual(zeile["kategorie_begruendung"], "Betrifft die Kantine am Standort.")
+        self.assertIs(zeile["manuell_pruefen"], True)
 
         # Zweites Setzen wird abgelehnt, nichts wird ueberschrieben
         status, _ = aufruf("POST", "klassifizierung_setzen", {**body, "kategorie": "Personal"})
@@ -186,9 +210,12 @@ class EndpunkteTest(unittest.TestCase):
                            {"geruecht_id": 999999999, "kategorie": "Standort", "kernaussage": "x"})
         self.assertEqual(status, 404)
         status, a = aufruf("POST", "klassifizierung_setzen",
-                           {"geruecht_id": 1, "kategorie": "Standort", "kernaussage": "x", "konfidenz": 0.9})
+                           {"geruecht_id": 1, "kategorie": "Standort", "kernaussage": "x", "sicherheit": 0.9})
         self.assertEqual(status, 400)
-        self.assertIn("konfidenz", a["fehler"][0])
+        self.assertIn("sicherheit", a["fehler"][0])
+        status, _ = aufruf("POST", "klassifizierung_setzen",
+                           {"geruecht_id": 1, "kategorie": "Standort", "kernaussage": "x", "konfidenz": 1.5})
+        self.assertEqual(status, 400)
 
 if __name__ == "__main__":
     unittest.main()
