@@ -20,6 +20,22 @@ KEY = os.environ.get("GERUECHTE_API_KEY", "")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def sql(abfrage):
+    """Fuehrt eine Abfrage per Supabase-CLI auf der verknuepften DB aus, liefert die Zeilen."""
+    with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False, encoding="utf-8") as f:
+        f.write(abfrage)
+        pfad = f.name
+    try:
+        r = subprocess.run(
+            ["npx", "supabase", "db", "query", "--linked", "--file", pfad],
+            cwd=REPO, check=True, capture_output=True, text=True, encoding="utf-8",
+            shell=os.name == "nt", timeout=180,
+        )
+    finally:
+        os.unlink(pfad)
+    return json.loads(r.stdout[r.stdout.index("{"):])["rows"]
+
+
 def aufruf(methode, pfad, body=None, key=KEY, roh=None, query=None):
     url = f"{BASE}/{pfad}"
     if query:
@@ -105,6 +121,9 @@ class EndpunkteTest(unittest.TestCase):
         status, a = aufruf("GET", "meldungsschema")
         self.assertEqual(status, 200)
         self.assertEqual(a["schema"]["required"], ["text"])
+        self.assertEqual(sorted(a["antwort_felder"]),
+                         ["aehnlichkeit", "embedding_fehler", "geruecht_id", "meldung_id",
+                          "neues_geruecht", "per_embedding_zugeordnet"])
 
     def test_geruechte_status_pflicht_und_geprueft(self):
         self.assertEqual(aufruf("GET", "geruechte")[0], 400)
@@ -146,6 +165,13 @@ class EndpunkteTest(unittest.TestCase):
         zweite = self.neue_meldung(text="X wird dichtgemacht", geruecht_id=gid)
         self.assertFalse(zweite["neues_geruecht"])
         self.assertEqual(zweite["geruecht_id"], gid)
+        # Explizite Zuordnung: keine Suche, aber das Embedding wird trotzdem gespeichert
+        self.assertFalse(zweite["per_embedding_zugeordnet"])
+        self.assertIsNone(zweite["aehnlichkeit"])
+        self.assertIsNone(zweite["embedding_fehler"])
+        zeile = sql(f"select embedding is not null as hat_embedding from meldungen "
+                    f"where meldung_id = {int(zweite['meldung_id'])};")[0]
+        self.assertIs(zeile["hat_embedding"], True)
 
         status, a = aufruf("GET", "geruechte", query={"status": "offen"})
         self.assertEqual(status, 200)
@@ -154,12 +180,51 @@ class EndpunkteTest(unittest.TestCase):
         self.assertIsNone(eintrag["kategorie"])  # noch nicht klassifiziert
         self.assertEqual(eintrag["beispieltext"], "[TEST] Abteilung X wird aufgelöst")
 
+    def test_embedding_aehnliche_meldungen_landen_im_selben_geruecht(self):
+        # Texte mit gemessener Aehnlichkeit (2026-09-25): Parkplatz-Paar 0.97, alle anderen
+        # Paare untereinander und mit den uebrigen Testtexten hoechstens 0.76
+        erste = self.neue_meldung(text="Der Parkplatz hinter Halle 3 wird ab März gesperrt")
+        self.assertIsNone(erste["embedding_fehler"])
+        self.assertTrue(erste["neues_geruecht"])
+        self.assertFalse(erste["per_embedding_zugeordnet"])
+        self.assertIsNone(erste["aehnlichkeit"])
+
+        # Sinngleich, anders formuliert, ohne geruecht_id -> dasselbe Geruecht
+        zweite = self.neue_meldung(text="Ab März kann man hinter Halle 3 nicht mehr parken")
+        self.assertIsNone(zweite["embedding_fehler"])
+        self.assertFalse(zweite["neues_geruecht"])
+        self.assertTrue(zweite["per_embedding_zugeordnet"])
+        self.assertEqual(zweite["geruecht_id"], erste["geruecht_id"])
+        self.assertGreaterEqual(zweite["aehnlichkeit"], 0.8)
+        self.assertLessEqual(zweite["aehnlichkeit"], 1.0)
+
+        # Anderes Thema -> neues Geruecht
+        dritte = self.neue_meldung(text="Die Firma führt ein neues Zeiterfassungssystem ein")
+        self.assertIsNone(dritte["embedding_fehler"])
+        self.assertTrue(dritte["neues_geruecht"])
+        self.assertFalse(dritte["per_embedding_zugeordnet"])
+        self.assertNotEqual(dritte["geruecht_id"], erste["geruecht_id"])
+
+        # Alle drei Embeddings liegen mit voller Laenge in der Datenbank
+        ids = ",".join(str(int(a["meldung_id"])) for a in (erste, zweite, dritte))
+        zeilen = sql(f"select extensions.vector_dims(embedding) as dim from meldungen "
+                     f"where meldung_id in ({ids});")
+        self.assertEqual([z["dim"] for z in zeilen], [3072, 3072, 3072])
+
+        status, a = aufruf("GET", "geruechte", query={"status": "all"})
+        self.assertEqual(status, 200)
+        eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == erste["geruecht_id"])
+        self.assertEqual(eintrag["anzahl_meldungen"], 2)
 
     # --- POST klassifizierung_setzen -----------------------------------------
 
     def test_klassifizierung_setzen_einmalig(self):
-        gid = self.neue_meldung(text="Kantinenpreise steigen ab Januar")["geruecht_id"]
-        body = {"geruecht_id": gid, "kategorie": "Standort", "kernaussage": "[TEST] Kantinenpreise steigen."}
+        antwort = self.neue_meldung(text="Kantinenpreise steigen ab Januar")
+        # Muss ein eigenes Geruecht sein, sonst klassifiziert der Test ein fremdes
+        self.assertTrue(antwort["neues_geruecht"], antwort)
+        gid = antwort["geruecht_id"]
+        body = {"geruecht_id": gid, "kategorie": "Standort", "kernaussage": "[TEST] Kantinenpreise steigen.",
+                "konfidenz": 0.83, "begruendung": "Betrifft die Kantine am Standort.", "manuell_pruefen": True}
 
         status, a = aufruf("POST", "klassifizierung_setzen", body)
         self.assertEqual(status, 200, a)
@@ -169,6 +234,13 @@ class EndpunkteTest(unittest.TestCase):
         eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == gid)
         self.assertEqual(eintrag["kategorie"], "Standort")
         self.assertEqual(eintrag["kernaussage"], "[TEST] Kantinenpreise steigen.")
+
+        # Protokollfelder liegen in der Datenbank (ueber die API nicht sichtbar)
+        zeile = sql(f"select kategorie_konfidenz, kategorie_begruendung, manuell_pruefen "
+                    f"from geruechte where geruecht_id = {int(gid)};")[0]
+        self.assertEqual(float(zeile["kategorie_konfidenz"]), 0.83)
+        self.assertEqual(zeile["kategorie_begruendung"], "Betrifft die Kantine am Standort.")
+        self.assertIs(zeile["manuell_pruefen"], True)
 
         # Zweites Setzen wird abgelehnt, nichts wird ueberschrieben
         status, _ = aufruf("POST", "klassifizierung_setzen", {**body, "kategorie": "Personal"})
@@ -186,9 +258,12 @@ class EndpunkteTest(unittest.TestCase):
                            {"geruecht_id": 999999999, "kategorie": "Standort", "kernaussage": "x"})
         self.assertEqual(status, 404)
         status, a = aufruf("POST", "klassifizierung_setzen",
-                           {"geruecht_id": 1, "kategorie": "Standort", "kernaussage": "x", "konfidenz": 0.9})
+                           {"geruecht_id": 1, "kategorie": "Standort", "kernaussage": "x", "sicherheit": 0.9})
         self.assertEqual(status, 400)
-        self.assertIn("konfidenz", a["fehler"][0])
+        self.assertIn("sicherheit", a["fehler"][0])
+        status, _ = aufruf("POST", "klassifizierung_setzen",
+                           {"geruecht_id": 1, "kategorie": "Standort", "kernaussage": "x", "konfidenz": 1.5})
+        self.assertEqual(status, 400)
 
 if __name__ == "__main__":
     unittest.main()
