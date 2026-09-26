@@ -231,7 +231,21 @@
       ]
     }
   ],
-  "pinData": {},
+  "pinData": {
+    "Webhook": [
+      {
+        "json": {
+          "headers": {},
+          "params": {},
+          "query": {},
+          "body": {
+            "geruecht_id": 1,
+            "text": "Die Preise in der Kantine steigen ab Januar."
+          }
+        }
+      }
+    ]
+  },
   "connections": {
     "Webhook": {
       "main": [
