@@ -2,10 +2,10 @@
 // Fehler abfangen, JSON antworten.
 import { pruefeApiKey } from "./logik.ts";
 
-export function json(status: number, body: unknown): Response {
+export function json(status: number, body: unknown, header: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body, null, 2), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
+    headers: { "Content-Type": "application/json; charset=utf-8", ...header },
   });
 }
 

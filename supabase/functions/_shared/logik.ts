@@ -243,6 +243,83 @@ export function entscheideZuordnung(
   return { art: "neu", geruecht_id: null, aehnlichkeit: null };
 }
 
+// --- Rate-Limit fuer POST /meldung -------------------------------------------
+
+// Bremse gegen Ausreisser, vor allem gegen einen Agenten in einer Schleife: jede Meldung
+// kostet ein Embedding, jedes neue Geruecht eine LLM-Klassifizierung in n8n.
+// Gezaehlt werden gespeicherte Meldungen je Zeitfenster, projektweit (die Meldungen sind
+// anonym, eine Grenze je Person gibt es deshalb nicht).
+// Die Standardwerte sind gewaehlt, nicht gemessen; ueberschreibbar per Supabase-Secret
+// ohne neues Deployment, etwa fuer den Praesentationstag.
+export interface RateLimit {
+  name: string;
+  fenster_sekunden: number;
+  max: number;
+}
+
+export const RATE_LIMITS: RateLimit[] = [
+  { name: "MELDUNG_LIMIT_PRO_MINUTE", fenster_sekunden: 60, max: 30 },
+  { name: "MELDUNG_LIMIT_PRO_TAG", fenster_sekunden: 86_400, max: 1000 },
+];
+
+// Liest die Grenzwerte aus der Umgebung. Ungueltige Werte fallen auf den Standard zurueck,
+// damit ein Tippfehler im Secret die Bremse nicht abschaltet.
+export function leseRateLimits(env: (name: string) => string | undefined, standard = RATE_LIMITS): RateLimit[] {
+  return standard.map((l) => {
+    const roh = env(l.name)?.trim() ?? "";
+    const wert = /^\d+$/.test(roh) ? Number(roh) : NaN;
+    return Number.isSafeInteger(wert) && wert >= 1 ? { ...l, max: wert } : l;
+  });
+}
+
+// anzahl[i] = gespeicherte Meldungen im Fenster von limits[i]. Ist ein Fenster voll,
+// kommt die Wartezeit (Retry-After) des laengsten vollen Fensters zurueck.
+export function pruefeRateLimit(
+  limits: RateLimit[],
+  anzahl: number[],
+): { ok: true } | { ok: false; fehler: string[]; retry_after: number } {
+  const voll = limits.filter((l, i) => anzahl[i] >= l.max);
+  if (voll.length === 0) return { ok: true };
+  return {
+    ok: false,
+    fehler: voll.map((l) => `Zu viele Meldungen: höchstens ${l.max} in ${beschreibeFenster(l.fenster_sekunden)}`),
+    retry_after: Math.max(...voll.map((l) => l.fenster_sekunden)),
+  };
+}
+
+function beschreibeFenster(sekunden: number): string {
+  if (sekunden === 60) return "einer Minute";
+  if (sekunden === 86_400) return "24 Stunden";
+  return `${sekunden} Sekunden`;
+}
+
+// --- Paginierung fuer GET /geruechte -----------------------------------------
+
+export const SEITE_STANDARD = 50;
+export const SEITE_MAX = 200;
+
+export function parsePaginierung(
+  limitRoh: string | null,
+  offsetRoh: string | null,
+): Ergebnis<{ limit: number; offset: number }> {
+  const probleme: string[] = [];
+  const zahl = (roh: string | null, standard: number) => {
+    const w = roh?.trim() ?? "";
+    if (w === "") return standard;
+    return /^\d+$/.test(w) ? Number(w) : NaN;
+  };
+  const limit = zahl(limitRoh, SEITE_STANDARD);
+  const offset = zahl(offsetRoh, 0);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > SEITE_MAX) {
+    probleme.push(`'limit' muss eine Ganzzahl von 1 bis ${SEITE_MAX} sein (Standard ${SEITE_STANDARD})`);
+  }
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    probleme.push("'offset' muss eine Ganzzahl ab 0 sein (Standard 0)");
+  }
+  if (probleme.length > 0) return { ok: false, fehler: probleme };
+  return ok({ limit, offset });
+}
+
 // --- Zugang ------------------------------------------------------------------
 
 // Vergleich in konstanter Zeit, damit die Antwortzeit nichts ueber den Schluessel verraet.
@@ -273,28 +350,32 @@ export function waehleAdminKey(legacy: string | undefined, secretKeysJson: strin
 
 // --- Antworten formen --------------------------------------------------------
 
+// Die Datenbank liefert je Geruecht nur noch die Anzahl (anzahl: [{count}]) und die
+// frueheste Meldung (erste, auf eine Zeile begrenzt), nicht mehr alle Meldungstexte.
 interface GeruechtZeile {
   geruecht_id: number;
   status: string;
   kernaussage: string | null;
   kategorien: { name: string } | { name: string }[] | null;
-  meldungen: { text: string; eingegangen_am: string }[] | null;
+  anzahl: { count: number }[] | null;
+  erste: { text: string; eingegangen_am: string }[] | null;
 }
 
 export function baueGeruechtListe(zeilen: GeruechtZeile[]) {
   return zeilen.map((z) => {
     const kat = Array.isArray(z.kategorien) ? z.kategorien[0] : z.kategorien;
-    const meldungen = [...(z.meldungen ?? [])].sort((a, b) =>
+    // Sortiert die Datenbank schon, hier nur zur Sicherheit, falls doch mehr kommt
+    const erste = [...(z.erste ?? [])].sort((a, b) =>
       Date.parse(a.eingegangen_am) - Date.parse(b.eingegangen_am)
-    );
+    )[0];
     return {
       geruecht_id: z.geruecht_id,
       kategorie: kat?.name ?? null,
       kernaussage: z.kernaussage,
       status: z.status,
-      anzahl_meldungen: meldungen.length,
-      beispieltext: meldungen[0]?.text ?? null,
-      erste_meldung_am: meldungen[0]?.eingegangen_am ?? null,
+      anzahl_meldungen: z.anzahl?.[0]?.count ?? 0,
+      beispieltext: erste?.text ?? null,
+      erste_meldung_am: erste?.eingegangen_am ?? null,
     };
   });
 }
@@ -383,13 +464,23 @@ export const ENDPUNKTE: Endpunkt[] = [
     name: "geruechte",
     methode: "GET",
     beschreibung: "Gerüchte mit Kategorie und Kernaussage (beide null = noch nicht klassifiziert), " +
-      "Status, Anzahl Meldungen und Beispieltext (erste Meldung).",
-    parameter: [{
-      name: "status",
-      ort: "query",
-      pflicht: true,
-      beschreibung: `Filter: all oder einer von ${STATUS_WERTE.join(", ")}`,
-    }],
+      "Status, Anzahl Meldungen und Beispieltext (erste Meldung). Seitenweise, aufsteigend nach geruecht_id; " +
+      "'gesamt' nennt die Anzahl aller Treffer.",
+    parameter: [
+      {
+        name: "status",
+        ort: "query",
+        pflicht: true,
+        beschreibung: `Filter: all oder einer von ${STATUS_WERTE.join(", ")}`,
+      },
+      {
+        name: "limit",
+        ort: "query",
+        pflicht: false,
+        beschreibung: `Gerüchte pro Seite, 1 bis ${SEITE_MAX}, Standard ${SEITE_STANDARD}`,
+      },
+      { name: "offset", ort: "query", pflicht: false, beschreibung: "so viele Gerüchte überspringen, Standard 0" },
+    ],
   }),
   ep({
     name: "status",
@@ -408,6 +499,7 @@ export const ENDPUNKTE: Endpunkt[] = [
     methode: "POST",
     beschreibung: "Speichert eine Meldung samt Embedding. Ohne geruecht_id wird sie per Ähnlichkeitssuche " +
       "dem passenden bestehenden Gerücht zugeordnet, sonst entsteht ein neues. " +
+      "Rate-Limit projektweit, bei Überschreitung 429 mit Header Retry-After. " +
       "Antwort: meldung_id, geruecht_id, neues_geruecht, per_embedding_zugeordnet, aehnlichkeit, embedding_fehler.",
     parameter: [
       { name: "text", ort: "body", pflicht: true, beschreibung: "Meldungstext, Namen geschwärzt" },

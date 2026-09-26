@@ -11,14 +11,20 @@ import {
   ENDPUNKTE,
   entscheideZuordnung,
   KERNAUSSAGE_MAX,
+  leseRateLimits,
   MELDUNG_ANTWORT_BEISPIEL,
   MELDUNG_ANTWORT_FELDER,
   MELDUNG_BEISPIEL,
   parseEmbeddingAntwort,
   parseTreffer,
   parseGeruechtId,
+  parsePaginierung,
   parseStatusFilter,
   pruefeApiKey,
+  pruefeRateLimit,
+  RATE_LIMITS,
+  SEITE_MAX,
+  SEITE_STANDARD,
   STATUS_WERTE,
   TEXT_MAX,
   validiereKlassifizierung,
@@ -363,14 +369,15 @@ Deno.test("calls: jeder Eintrag hat Methode, Pfad und Beschreibung", () => {
 
 // --- baueGeruechtListe -------------------------------------------------------
 
-Deno.test("liste: Anzahl und Beispieltext aus der fruehesten Meldung", () => {
+Deno.test("liste: Anzahl aus count, Beispieltext aus der fruehesten Meldung", () => {
   const liste = baueGeruechtListe([
     {
       geruecht_id: 7,
       status: "offen",
       kernaussage: "Abteilung X wird aufgelöst.",
       kategorien: { name: "Organisation" },
-      meldungen: [
+      anzahl: [{ count: 5 }],
+      erste: [
         { text: "spaeter", eingegangen_am: "2026-09-25T12:00:00+00:00" },
         { text: "zuerst", eingegangen_am: "2026-09-25T10:00:00+00:00" },
       ],
@@ -381,7 +388,7 @@ Deno.test("liste: Anzahl und Beispieltext aus der fruehesten Meldung", () => {
     kategorie: "Organisation",
     kernaussage: "Abteilung X wird aufgelöst.",
     status: "offen",
-    anzahl_meldungen: 2,
+    anzahl_meldungen: 5,
     beispieltext: "zuerst",
     erste_meldung_am: "2026-09-25T10:00:00+00:00",
   }]);
@@ -389,7 +396,14 @@ Deno.test("liste: Anzahl und Beispieltext aus der fruehesten Meldung", () => {
 
 Deno.test("liste: noch nicht klassifiziertes Geruecht hat Kategorie null", () => {
   const liste = baueGeruechtListe([
-    { geruecht_id: 2, status: "offen", kernaussage: null, kategorien: null, meldungen: [{ text: "a", eingegangen_am: "2026-09-25T10:00:00+00:00" }] },
+    {
+      geruecht_id: 2,
+      status: "offen",
+      kernaussage: null,
+      kategorien: null,
+      anzahl: [{ count: 1 }],
+      erste: [{ text: "a", eingegangen_am: "2026-09-25T10:00:00+00:00" }],
+    },
   ]);
   assertEquals(liste[0].kategorie, null);
   assertEquals(liste[0].kernaussage, null);
@@ -398,10 +412,96 @@ Deno.test("liste: noch nicht klassifiziertes Geruecht hat Kategorie null", () =>
 
 Deno.test("liste: Geruecht ohne Meldungen und Kategorie als Array", () => {
   const liste = baueGeruechtListe([
-    { geruecht_id: 1, status: "widerlegt", kernaussage: null, kategorien: [{ name: "Standort" }], meldungen: [] },
+    { geruecht_id: 1, status: "widerlegt", kernaussage: null, kategorien: [{ name: "Standort" }], anzahl: [{ count: 0 }], erste: [] },
   ]);
   assertEquals(liste[0].kategorie, "Standort");
   assertEquals(liste[0].anzahl_meldungen, 0);
   assertEquals(liste[0].beispieltext, null);
   assertEquals(liste[0].erste_meldung_am, null);
+});
+
+Deno.test("liste: fehlende Einbettungen (null) ergeben 0 und null statt Absturz", () => {
+  const liste = baueGeruechtListe([
+    { geruecht_id: 3, status: "offen", kernaussage: null, kategorien: null, anzahl: null, erste: null },
+  ]);
+  assertEquals(liste[0].anzahl_meldungen, 0);
+  assertEquals(liste[0].beispieltext, null);
+});
+
+// --- Rate-Limit --------------------------------------------------------------
+
+const LIMITS_TEST = [
+  { name: "PRO_MINUTE", fenster_sekunden: 60, max: 3 },
+  { name: "PRO_TAG", fenster_sekunden: 86_400, max: 10 },
+];
+
+Deno.test("rate-limit: unter allen Grenzen -> ok", () => {
+  assertEquals(pruefeRateLimit(LIMITS_TEST, [0, 0]), { ok: true });
+  assertEquals(pruefeRateLimit(LIMITS_TEST, [2, 9]), { ok: true });
+});
+
+Deno.test("rate-limit: Grenze erreicht -> gesperrt, die Grenze selbst zaehlt schon", () => {
+  // 3 gespeicherte Meldungen in der Minute: die vierte wuerde die Grenze ueberschreiten
+  const r = pruefeRateLimit(LIMITS_TEST, [3, 3]);
+  assert(!r.ok);
+  if (!r.ok) {
+    assertEquals(r.retry_after, 60);
+    assertEquals(r.fehler.length, 1);
+    assert(r.fehler[0].includes("3"), r.fehler[0]);
+  }
+});
+
+Deno.test("rate-limit: mehrere volle Fenster -> alle gemeldet, laengste Wartezeit", () => {
+  const r = pruefeRateLimit(LIMITS_TEST, [5, 10]);
+  assert(!r.ok);
+  if (!r.ok) {
+    assertEquals(r.fehler.length, 2);
+    assertEquals(r.retry_after, 86_400);
+  }
+  const nurTag = pruefeRateLimit(LIMITS_TEST, [0, 12]);
+  assert(!nurTag.ok);
+  if (!nurTag.ok) assertEquals(nurTag.retry_after, 86_400);
+});
+
+Deno.test("rate-limit: Standardwerte sind gesetzt und sinnvoll", () => {
+  assertEquals(RATE_LIMITS.map((l) => l.fenster_sekunden), [60, 86_400]);
+  for (const l of RATE_LIMITS) assert(l.max >= 1, l.name);
+  // Eine Minute darf nie mehr erlauben als ein ganzer Tag
+  assert(RATE_LIMITS[0].max <= RATE_LIMITS[1].max);
+});
+
+Deno.test("rate-limit: Werte aus der Umgebung ueberschreiben den Standard", () => {
+  const env: Record<string, string> = { PRO_MINUTE: "5", PRO_TAG: " 200 " };
+  assertEquals(leseRateLimits((n) => env[n], LIMITS_TEST).map((l) => l.max), [5, 200]);
+});
+
+Deno.test("rate-limit: ungueltige oder fehlende Werte fallen auf den Standard zurueck", () => {
+  for (const roh of [undefined, "", "0", "-5", "abc", "1.5", "1e3", "99999999999999999999"]) {
+    const limits = leseRateLimits((n) => (n === "PRO_MINUTE" ? roh : undefined), LIMITS_TEST);
+    assertEquals(limits.map((l) => l.max), [3, 10], String(roh));
+  }
+});
+
+// --- Paginierung -------------------------------------------------------------
+
+Deno.test("seite: ohne Angaben Standardwerte", () => {
+  assertEquals(parsePaginierung(null, null), { ok: true, wert: { limit: SEITE_STANDARD, offset: 0 } });
+  assertEquals(parsePaginierung("", " "), { ok: true, wert: { limit: SEITE_STANDARD, offset: 0 } });
+});
+
+Deno.test("seite: gueltige Werte, Grenzen erlaubt", () => {
+  assertEquals(parsePaginierung("1", "0"), { ok: true, wert: { limit: 1, offset: 0 } });
+  assertEquals(parsePaginierung(String(SEITE_MAX), "400"), { ok: true, wert: { limit: SEITE_MAX, offset: 400 } });
+});
+
+Deno.test("seite: ungueltige Werte -> Fehler, beide gesammelt", () => {
+  for (const limit of ["0", String(SEITE_MAX + 1), "-1", "abc", "2.5"]) {
+    assertEquals(parsePaginierung(limit, null).ok, false, limit);
+  }
+  for (const offset of ["-1", "x", "1.5"]) {
+    assertEquals(parsePaginierung(null, offset).ok, false, offset);
+  }
+  const beide = parsePaginierung("0", "-1");
+  assert(!beide.ok);
+  if (!beide.ok) assertEquals(beide.fehler.length, 2);
 });

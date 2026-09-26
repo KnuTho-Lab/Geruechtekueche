@@ -13,13 +13,36 @@ import { endpunkt, json } from "../_shared/http.ts";
 import {
   AEHNLICHKEITS_SCHWELLE,
   entscheideZuordnung,
+  leseRateLimits,
   parseTreffer,
+  pruefeRateLimit,
   type Treffer,
   validiereMeldung,
   vektorAlsText,
 } from "../_shared/logik.ts";
 
+// Zaehlt die gespeicherten Meldungen je Zeitfenster. Nicht atomar: bei gleichzeitigen
+// Aufrufen kann das Limit knapp ueberschritten werden, als Bremse reicht das.
+async function zaehleMeldungen(fensterSekunden: number): Promise<number> {
+  const seit = new Date(Date.now() - fensterSekunden * 1000).toISOString();
+  const { count, error } = await db()
+    .from("meldungen")
+    .select("meldung_id", { count: "exact", head: true })
+    .gte("eingegangen_am", seit);
+  if (error) throw error;
+  return count ?? 0;
+}
+
 Deno.serve(endpunkt("POST", async (req) => {
+  // Vor allem anderen, damit ein Ausreisser weder Embeddings noch Klassifizierungen kostet
+  const limits = leseRateLimits((name) => Deno.env.get(name));
+  const anzahl = await Promise.all(limits.map((l) => zaehleMeldungen(l.fenster_sekunden)));
+  const bremse = pruefeRateLimit(limits, anzahl);
+  if (!bremse.ok) {
+    console.error("Rate-Limit erreicht:", bremse.fehler);
+    return json(429, { fehler: bremse.fehler }, { "Retry-After": String(bremse.retry_after) });
+  }
+
   let body: unknown;
   try {
     body = await req.json();

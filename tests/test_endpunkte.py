@@ -131,6 +131,35 @@ class EndpunkteTest(unittest.TestCase):
         status, a = aufruf("GET", "geruechte", query={"status": "all"})
         self.assertEqual(status, 200)
         self.assertEqual(a["anzahl"], len(a["geruechte"]))
+        self.assertEqual((a["limit"], a["offset"]), (50, 0))
+        self.assertGreaterEqual(a["gesamt"], a["anzahl"])
+
+    def test_geruechte_paginierung(self):
+        # Zwei eigene Geruechte sicherstellen, damit es mindestens zwei Seiten gibt
+        for text in ("Die Betriebsfeier fällt dieses Jahr aus",
+                     "Im Lager werden nächsten Monat neue Scanner eingeführt"):
+            self.neue_meldung(text=text)
+        status, alle = aufruf("GET", "geruechte", query={"status": "all", "limit": 200})
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(alle["gesamt"], 2)
+
+        status, s1 = aufruf("GET", "geruechte", query={"status": "all", "limit": 1})
+        status2, s2 = aufruf("GET", "geruechte", query={"status": "all", "limit": 1, "offset": 1})
+        self.assertEqual((status, status2), (200, 200))
+        self.assertEqual((s1["anzahl"], s2["anzahl"]), (1, 1))
+        self.assertEqual(s1["gesamt"], alle["gesamt"])
+        # Seiten folgen der Sortierung nach geruecht_id und ueberlappen nicht
+        self.assertEqual([s1["geruechte"][0]["geruecht_id"], s2["geruechte"][0]["geruecht_id"]],
+                         [g["geruecht_id"] for g in alle["geruechte"][:2]])
+
+        # offset hinter dem letzten Treffer: leere Seite statt Fehler
+        status, leer = aufruf("GET", "geruechte", query={"status": "all", "offset": alle["gesamt"] + 5})
+        self.assertEqual(status, 200, leer)
+        self.assertEqual((leer["anzahl"], leer["geruechte"], leer["gesamt"]), (0, [], alle["gesamt"]))
+
+        for kaputt in ({"limit": 0}, {"limit": 201}, {"limit": "abc"}, {"offset": -1}):
+            with self.subTest(kaputt=kaputt):
+                self.assertEqual(aufruf("GET", "geruechte", query={"status": "all", **kaputt})[0], 400)
 
     def test_status_fehlerfaelle(self):
         self.assertEqual(aufruf("GET", "status")[0], 400)
@@ -219,12 +248,12 @@ class EndpunkteTest(unittest.TestCase):
     # --- POST klassifizierung_setzen -----------------------------------------
 
     def test_klassifizierung_setzen_einmalig(self):
-        antwort = self.neue_meldung(text="Kantinenpreise steigen ab Januar")
+        antwort = self.neue_meldung(text="Im Serverraum wird ein Aquarium mit Kugelfischen aufgestellt")
         # Muss ein eigenes Geruecht sein, sonst klassifiziert der Test ein fremdes
         self.assertTrue(antwort["neues_geruecht"], antwort)
         gid = antwort["geruecht_id"]
-        body = {"geruecht_id": gid, "kategorie": "Standort", "kernaussage": "[TEST] Kantinenpreise steigen.",
-                "konfidenz": 0.83, "begruendung": "Betrifft die Kantine am Standort.", "manuell_pruefen": True}
+        body = {"geruecht_id": gid, "kategorie": "Standort", "kernaussage": "[TEST] Im Serverraum kommt ein Aquarium.",
+                "konfidenz": 0.83, "begruendung": "Betrifft den Serverraum am Standort.", "manuell_pruefen": True}
 
         status, a = aufruf("POST", "klassifizierung_setzen", body)
         self.assertEqual(status, 200, a)
@@ -233,13 +262,13 @@ class EndpunkteTest(unittest.TestCase):
         status, a = aufruf("GET", "geruechte", query={"status": "all"})
         eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == gid)
         self.assertEqual(eintrag["kategorie"], "Standort")
-        self.assertEqual(eintrag["kernaussage"], "[TEST] Kantinenpreise steigen.")
+        self.assertEqual(eintrag["kernaussage"], "[TEST] Im Serverraum kommt ein Aquarium.")
 
         # Protokollfelder liegen in der Datenbank (ueber die API nicht sichtbar)
         zeile = sql(f"select kategorie_konfidenz, kategorie_begruendung, manuell_pruefen "
                     f"from geruechte where geruecht_id = {int(gid)};")[0]
         self.assertEqual(float(zeile["kategorie_konfidenz"]), 0.83)
-        self.assertEqual(zeile["kategorie_begruendung"], "Betrifft die Kantine am Standort.")
+        self.assertEqual(zeile["kategorie_begruendung"], "Betrifft den Serverraum am Standort.")
         self.assertIs(zeile["manuell_pruefen"], True)
 
         # Zweites Setzen wird abgelehnt, nichts wird ueberschrieben
