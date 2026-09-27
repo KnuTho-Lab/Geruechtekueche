@@ -98,7 +98,7 @@ export interface KlassifizierungEingabe {
   manuell_pruefen: boolean;
 }
 
-const KLASSIFIZIERUNG_FELDER = ["geruecht_id", "kategorie", "kernaussage", "konfidenz", "begruendung", "manuell_pruefen"];
+export const KLASSIFIZIERUNG_FELDER = ["geruecht_id", "kategorie", "kernaussage", "konfidenz", "begruendung", "manuell_pruefen"];
 
 export function validiereKlassifizierung(body: unknown): Ergebnis<KlassifizierungEingabe> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -380,6 +380,12 @@ export function baueGeruechtListe(zeilen: GeruechtZeile[]) {
   });
 }
 
+// Umschlag einer Seite von GET /geruechte, als Funktion, damit der Katalog gegen die
+// echten Feldnamen getestet werden kann
+export function baueGeruechteSeite<T>(status: string, gesamt: number, limit: number, offset: number, geruechte: T[]) {
+  return { status, gesamt, limit, offset, anzahl: geruechte.length, geruechte };
+}
+
 // --- Selbstbeschreibung der API ----------------------------------------------
 
 export const MELDUNG_BEISPIEL = {
@@ -437,35 +443,98 @@ export const MELDUNG_ANTWORT_FELDER = {
     "werden konnte. Die Meldung ist trotzdem gespeichert, ohne geruecht_id dann in einem neuen Gerücht.",
 };
 
+// Fehler, die jeder Endpunkt ueber den gemeinsamen Rahmen (_shared/http.ts) liefern kann.
+// Stehen einmal oben in GET /calls, nicht bei jedem Endpunkt.
+export const ALLGEMEINE_FEHLER: Record<string, string> = {
+  "401": "x-api-key fehlt oder ist falsch",
+  "405": "falsche HTTP-Methode",
+  "500": "interner Fehler, Details im Function-Log",
+};
+
+// Katalog-Eintrag. Die Tests in tests/logik_test.ts gleichen Methode, Statuscodes,
+// Parameter und Antwortfelder gegen den Code ab, damit GET /calls nicht veraltet.
 export interface Endpunkt {
   name: string;
   methode: "GET" | "POST";
   pfad: string;
   beschreibung: string;
   parameter: { name: string; ort: "query" | "body"; pflicht: boolean; beschreibung: string }[];
+  erfolg: 200 | 201;
+  antwort: Record<string, string>;
+  fehler: Record<string, string>;
 }
 
 const ep = (e: Omit<Endpunkt, "pfad">): Endpunkt => ({ ...e, pfad: `/functions/v1/${e.name}` });
+
+const MELDUNG_FEHLER_EIGENE: Record<string, string> = {
+  "400": "Body ungültig oder unbekanntes Feld (auch 'kategorie'), Details in 'fehler'",
+  "404": "geruecht_id angegeben, aber das Gerücht existiert nicht",
+  "429": "Rate-Limit erreicht, Header Retry-After nennt die Wartezeit in Sekunden",
+};
+
+// Fuer GET /meldungsschema: alle Fehler, die POST /meldung liefern kann
+export const MELDUNG_FEHLER: Record<string, string> = { ...MELDUNG_FEHLER_EIGENE, ...ALLGEMEINE_FEHLER };
+
+// Was die Datenbank selbst verschickt, nicht aufrufbar, aber Teil der Schnittstelle
+export const AUSGEHENDE_AUFRUFE = [
+  {
+    name: "klassifizierung_anstossen",
+    ausloeser: "erste Meldung eines noch nicht klassifizierten Gerüchts (Trigger auf meldungen)",
+    ziel: "n8n-Klassifizierer, URL aus dem Supabase Vault (klassifizierer_webhook_url)",
+    methode: "POST",
+    header: { "x-webhook-secret": "Wert aus dem Supabase Vault (klassifizierer_webhook_secret)" },
+    body: { geruecht_id: "Rücksendeadresse für POST klassifizierung_setzen", text: "Text der ersten Meldung" },
+    hinweis: "Timeout 5 s, kein Retry",
+  },
+];
 
 export const ENDPUNKTE: Endpunkt[] = [
   ep({
     name: "calls",
     methode: "GET",
-    beschreibung: "Diese Übersicht: alle Endpunkte mit ihren Parametern.",
+    beschreibung: "Diese Übersicht: alle Endpunkte mit Parametern, Antwortfeldern und Fehlercodes.",
     parameter: [],
+    erfolg: 200,
+    antwort: {
+      basis_url: "Basis aller Pfade",
+      authentifizierung: "wie der Schlüssel mitgeschickt wird",
+      allgemeine_fehler: "Fehlercodes, die jeder Endpunkt liefern kann",
+      endpunkte: "dieser Katalog",
+      ausgehende_aufrufe: "was die Datenbank selbst an andere Dienste schickt",
+    },
+    fehler: {},
   }),
   ep({
     name: "kategorien",
     methode: "GET",
     beschreibung: "Alle Kategorien, die der Klassifizierungs-Workflow vergeben kann.",
     parameter: [],
+    erfolg: 200,
+    antwort: { kategorien: "Liste der Kategorienamen" },
+    fehler: {},
   }),
   ep({
     name: "geruechte",
     methode: "GET",
     beschreibung: "Gerüchte mit Kategorie und Kernaussage (beide null = noch nicht klassifiziert), " +
-      "Status, Anzahl Meldungen und Beispieltext (erste Meldung). Seitenweise, aufsteigend nach geruecht_id; " +
-      "'gesamt' nennt die Anzahl aller Treffer.",
+      "Status, Anzahl Meldungen und Beispieltext (erste Meldung). Seitenweise, aufsteigend nach geruecht_id.",
+    erfolg: 200,
+    antwort: {
+      status: "der angewendete Filter",
+      gesamt: "Anzahl aller Treffer über alle Seiten",
+      limit: "Gerüchte pro Seite",
+      offset: "übersprungene Gerüchte",
+      anzahl: "Gerüchte auf dieser Seite",
+      geruechte: "die Gerüchte dieser Seite",
+      "geruechte[].geruecht_id": "ID des Gerüchts",
+      "geruechte[].kategorie": "Kategoriename, null = noch nicht klassifiziert",
+      "geruechte[].kernaussage": "neutrale Kernaussage, null = noch nicht klassifiziert",
+      "geruechte[].status": STATUS_WERTE.join(", "),
+      "geruechte[].anzahl_meldungen": "Meldungen in diesem Gerücht",
+      "geruechte[].beispieltext": "Text der ersten Meldung",
+      "geruechte[].erste_meldung_am": "Zeitpunkt der ersten Meldung (ISO 8601, UTC)",
+    },
+    fehler: { "400": "status fehlt oder ist unbekannt, oder limit/offset ungültig" },
     parameter: [
       {
         name: "status",
@@ -487,20 +556,35 @@ export const ENDPUNKTE: Endpunkt[] = [
     methode: "GET",
     beschreibung: "Status eines einzelnen Gerüchts.",
     parameter: [{ name: "geruecht_id", ort: "query", pflicht: true, beschreibung: "ID des Gerüchts" }],
+    erfolg: 200,
+    antwort: { geruecht_id: "ID des Gerüchts", status: STATUS_WERTE.join(", ") },
+    fehler: { "400": "geruecht_id fehlt oder ist keine positive Ganzzahl", "404": "Gerücht existiert nicht" },
   }),
   ep({
     name: "meldungsschema",
     methode: "GET",
-    beschreibung: "Bauanleitung für POST meldung: JSON Schema, Beispiel und Beispielantwort.",
+    beschreibung: "Bauanleitung für POST meldung: JSON Schema, Beispiel, Beispielantwort und Fehlercodes.",
     parameter: [],
+    erfolg: 200,
+    antwort: {
+      endpunkt: "Methode und Pfad",
+      header: "nötige Header",
+      schema: "JSON Schema des Bodys",
+      beispiel: "gültiger Beispiel-Body",
+      antwort_beispiel: "Beispielantwort",
+      antwort_felder: "Bedeutung der Antwortfelder",
+      fehler: "alle Fehlercodes von POST meldung",
+    },
+    fehler: {},
   }),
   ep({
     name: "meldung",
     methode: "POST",
     beschreibung: "Speichert eine Meldung samt Embedding. Ohne geruecht_id wird sie per Ähnlichkeitssuche " +
-      "dem passenden bestehenden Gerücht zugeordnet, sonst entsteht ein neues. " +
-      "Rate-Limit projektweit, bei Überschreitung 429 mit Header Retry-After. " +
-      "Antwort: meldung_id, geruecht_id, neues_geruecht, per_embedding_zugeordnet, aehnlichkeit, embedding_fehler.",
+      "dem passenden bestehenden Gerücht zugeordnet, sonst entsteht ein neues. Rate-Limit projektweit.",
+    erfolg: 201,
+    antwort: MELDUNG_ANTWORT_FELDER,
+    fehler: MELDUNG_FEHLER_EIGENE,
     parameter: [
       { name: "text", ort: "body", pflicht: true, beschreibung: "Meldungstext, Namen geschwärzt" },
       { name: "user_id", ort: "body", pflicht: false, beschreibung: "VORLÄUFIG, Kennung der Person" },
@@ -516,7 +600,21 @@ export const ENDPUNKTE: Endpunkt[] = [
     name: "klassifizierung_setzen",
     methode: "POST",
     beschreibung: "Für den Klassifizierungs-Workflow: setzt Kategorie und Kernaussage eines Gerüchts. " +
-      "Nur einmal möglich, ein bereits klassifiziertes Gerücht liefert 409.",
+      "Nur einmal möglich.",
+    erfolg: 200,
+    antwort: {
+      geruecht_id: "wie gesendet",
+      kategorie: "wie gesendet, getrimmt",
+      kernaussage: "wie gesendet, getrimmt",
+      konfidenz: "wie gesendet, sonst null",
+      begruendung: "wie gesendet, sonst null",
+      manuell_pruefen: "wie gesendet, sonst false",
+    },
+    fehler: {
+      "400": "Body ungültig oder Kategorie unbekannt (dann mit 'gueltige_kategorien')",
+      "404": "Gerücht existiert nicht",
+      "409": "Gerücht ist bereits klassifiziert",
+    },
     parameter: [
       { name: "geruecht_id", ort: "body", pflicht: true, beschreibung: "aus dem Trigger-Aufruf" },
       { name: "kategorie", ort: "body", pflicht: true, beschreibung: "Name aus GET kategorien" },

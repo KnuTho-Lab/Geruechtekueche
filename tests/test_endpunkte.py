@@ -111,6 +111,15 @@ class EndpunkteTest(unittest.TestCase):
         self.assertEqual(sorted(e["name"] for e in a["endpunkte"]),
                          ["calls", "geruechte", "kategorien", "klassifizierung_setzen", "meldung",
                           "meldungsschema", "status"])
+        self.assertEqual(sorted(a["allgemeine_fehler"]), ["401", "405", "500"])
+        self.assertEqual(sorted(a), ["allgemeine_fehler", "ausgehende_aufrufe", "authentifizierung",
+                                     "basis_url", "endpunkte"])
+        for e in a["endpunkte"]:
+            self.assertIn(e["erfolg"], (200, 201), e["name"])
+            self.assertTrue(e["antwort"], e["name"])
+        # Der Katalog beschreibt sich selbst richtig
+        calls = next(e for e in a["endpunkte"] if e["name"] == "calls")
+        self.assertEqual(sorted(calls["antwort"]), sorted(a))
 
     def test_kategorien(self):
         status, a = aufruf("GET", "kategorien")
@@ -124,6 +133,7 @@ class EndpunkteTest(unittest.TestCase):
         self.assertEqual(sorted(a["antwort_felder"]),
                          ["aehnlichkeit", "embedding_fehler", "geruecht_id", "meldung_id",
                           "neues_geruecht", "per_embedding_zugeordnet"])
+        self.assertEqual(sorted(a["fehler"]), ["400", "401", "404", "405", "429", "500"])
 
     def test_geruechte_status_pflicht_und_geprueft(self):
         self.assertEqual(aufruf("GET", "geruechte")[0], 400)

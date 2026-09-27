@@ -3,7 +3,9 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   AEHNLICHKEITS_SCHWELLE,
+  ALLGEMEINE_FEHLER,
   baueEmbeddingAnfrage,
+  baueGeruechteSeite,
   baueGeruechtListe,
   BEGRUENDUNG_MAX,
   EMBEDDING_DIMENSION,
@@ -11,10 +13,13 @@ import {
   ENDPUNKTE,
   entscheideZuordnung,
   KERNAUSSAGE_MAX,
+  KLASSIFIZIERUNG_FELDER,
   leseRateLimits,
   MELDUNG_ANTWORT_BEISPIEL,
   MELDUNG_ANTWORT_FELDER,
   MELDUNG_BEISPIEL,
+  MELDUNG_FEHLER,
+  MELDUNGSSCHEMA,
   parseEmbeddingAntwort,
   parseTreffer,
   parseGeruechtId,
@@ -365,6 +370,86 @@ Deno.test("calls: jeder Eintrag hat Methode, Pfad und Beschreibung", () => {
     assertEquals(e.pfad, `/functions/v1/${e.name}`);
     assert(e.beschreibung.length > 0, e.name);
   }
+});
+
+// Liest den Code einer Function, damit der Katalog nicht still vom Code wegdriftet
+async function functionCode(name: string): Promise<string> {
+  return await Deno.readTextFile(new URL(`../${name}/index.ts`, import.meta.url));
+}
+
+Deno.test("calls: Methode im Katalog ist die Methode im Code", async () => {
+  for (const e of ENDPUNKTE) {
+    const treffer = (await functionCode(e.name)).match(/endpunkt\("(GET|POST)"/);
+    assertEquals(treffer?.[1], e.methode, e.name);
+  }
+});
+
+Deno.test("calls: jeder Statuscode im Code ist im Katalog beschrieben und umgekehrt", async () => {
+  for (const e of ENDPUNKTE) {
+    const imCode = [...(await functionCode(e.name)).matchAll(/json\((\d{3})/g)].map((t) => t[1]);
+    const beschrieben = [String(e.erfolg), ...Object.keys(e.fehler)];
+    for (const code of imCode) assert(beschrieben.includes(code), `${e.name}: ${code} fehlt im Katalog`);
+    for (const code of beschrieben) assert(imCode.includes(code), `${e.name}: ${code} liefert der Code nicht`);
+  }
+});
+
+Deno.test("calls: allgemeine Fehler stehen im gemeinsamen Rahmen und nicht doppelt je Endpunkt", async () => {
+  const rahmen = await Deno.readTextFile(new URL("../_shared/http.ts", import.meta.url));
+  const imRahmen = [...rahmen.matchAll(/json\((\d{3})/g)].map((t) => t[1]).sort();
+  assertEquals(Object.keys(ALLGEMEINE_FEHLER).sort(), imRahmen);
+  for (const e of ENDPUNKTE) {
+    for (const code of Object.keys(e.fehler)) assert(!(code in ALLGEMEINE_FEHLER), `${e.name}: ${code}`);
+  }
+});
+
+Deno.test("calls: jeder Eintrag beschreibt seine Antwort", () => {
+  for (const e of ENDPUNKTE) assert(Object.keys(e.antwort).length > 0, e.name);
+});
+
+Deno.test("calls: Parameter von meldung sind genau die Felder des Meldungsschemas", () => {
+  const meldung = ENDPUNKTE.find((e) => e.name === "meldung")!;
+  assertEquals(meldung.parameter.map((p) => p.name).sort(), Object.keys(MELDUNGSSCHEMA.properties).sort());
+  assertEquals(meldung.parameter.filter((p) => p.pflicht).map((p) => p.name), MELDUNGSSCHEMA.required);
+});
+
+Deno.test("calls: Antwort von meldung ist die aus dem Meldungsschema, Rate-Limit dokumentiert", () => {
+  const meldung = ENDPUNKTE.find((e) => e.name === "meldung")!;
+  assertEquals(meldung.antwort, MELDUNG_ANTWORT_FELDER);
+  assert("429" in meldung.fehler);
+});
+
+Deno.test("calls: Parameter und Antwort von klassifizierung_setzen sind die gepruefte Eingabe", () => {
+  const k = ENDPUNKTE.find((e) => e.name === "klassifizierung_setzen")!;
+  assertEquals(k.parameter.map((p) => p.name).sort(), [...KLASSIFIZIERUNG_FELDER].sort());
+  const gueltig = validiereKlassifizierung({ geruecht_id: 1, kategorie: "Personal", kernaussage: "x" });
+  assert(gueltig.ok);
+  assertEquals(Object.keys(k.antwort).sort(), Object.keys(gueltig.wert).sort());
+});
+
+Deno.test("calls: Antwort von geruechte beschreibt genau Seite und Listeneintrag", () => {
+  const g = ENDPUNKTE.find((e) => e.name === "geruechte")!;
+  const seite = baueGeruechteSeite("all", 0, 50, 0, []);
+  const eintrag = baueGeruechtListe([
+    { geruecht_id: 1, status: "offen", kernaussage: null, kategorien: null, anzahl: null, erste: null },
+  ])[0];
+  const erwartet = [...Object.keys(seite), ...Object.keys(eintrag).map((f) => `geruechte[].${f}`)].sort();
+  assertEquals(Object.keys(g.antwort).sort(), erwartet);
+});
+
+Deno.test("meldungsschema: Fehlerliste ist die aus dem Katalog, samt allgemeinen Fehlern", () => {
+  const meldung = ENDPUNKTE.find((e) => e.name === "meldung")!;
+  assertEquals(MELDUNG_FEHLER, { ...meldung.fehler, ...ALLGEMEINE_FEHLER });
+});
+
+Deno.test("seite: zaehlt die Eintraege der Liste", () => {
+  assertEquals(baueGeruechteSeite("offen", 7, 2, 4, [{ a: 1 }, { a: 2 }]), {
+    status: "offen",
+    gesamt: 7,
+    limit: 2,
+    offset: 4,
+    anzahl: 2,
+    geruechte: [{ a: 1 }, { a: 2 }],
+  });
 });
 
 // --- baueGeruechtListe -------------------------------------------------------

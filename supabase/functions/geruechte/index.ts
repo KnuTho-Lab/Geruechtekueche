@@ -3,7 +3,7 @@
 // die frueheste Meldung, nicht alle Texte: die Antwort bleibt klein, egal wie viel gemeldet wird.
 import { db } from "../_shared/db.ts";
 import { endpunkt, json } from "../_shared/http.ts";
-import { baueGeruechtListe, parsePaginierung, parseStatusFilter } from "../_shared/logik.ts";
+import { baueGeruechteSeite, baueGeruechtListe, parsePaginierung, parseStatusFilter } from "../_shared/logik.ts";
 
 Deno.serve(endpunkt("GET", async (req) => {
   const params = new URL(req.url).searchParams;
@@ -33,9 +33,8 @@ Deno.serve(endpunkt("GET", async (req) => {
     if (filter.wert !== "all") zaehlen = zaehlen.eq("status", filter.wert);
     const z = await zaehlen;
     if (z.error) throw z.error;
-    return json(200, { status: filter.wert, gesamt: z.count ?? 0, limit, offset, anzahl: 0, geruechte: [] });
+    return json(200, baueGeruechteSeite(filter.wert, z.count ?? 0, limit, offset, []));
   }
   if (error) throw error;
-  const geruechte = baueGeruechtListe(data);
-  return json(200, { status: filter.wert, gesamt: count ?? 0, limit, offset, anzahl: geruechte.length, geruechte });
+  return json(200, baueGeruechteSeite(filter.wert, count ?? 0, limit, offset, baueGeruechtListe(data)));
 }));
