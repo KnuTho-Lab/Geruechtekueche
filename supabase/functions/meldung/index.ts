@@ -7,19 +7,49 @@
 // Faellt der Embedding-Dienst oder die Suche aus, wird die Meldung trotzdem gespeichert
 // (ohne Embedding, ohne geruecht_id in einem neuen Geruecht) und der Grund in
 // embedding_fehler gemeldet. Eine Meldung darf nie verloren gehen.
+// Art der Zuordnung, beste Aehnlichkeit und embedding_fehler stehen zusaetzlich an der
+// Meldung in der Datenbank (Fehlersuche, Kalibrieren der Schwelle, Dashboard).
 import { db } from "../_shared/db.ts";
 import { berechneEmbedding } from "../_shared/embedding.ts";
 import { endpunkt, json } from "../_shared/http.ts";
 import {
-  AEHNLICHKEITS_SCHWELLE,
   entscheideZuordnung,
+  leseRateLimits,
   parseTreffer,
+  pruefeRateLimit,
   type Treffer,
   validiereMeldung,
   vektorAlsText,
+  zuordnungsProtokoll,
 } from "../_shared/logik.ts";
 
+// Die Suche liefert immer den naechsten Nachbarn, auch unterhalb der Schwelle: dessen
+// Aehnlichkeit wird zum Kalibrieren gespeichert. Ob zugeordnet wird, entscheidet danach
+// entscheideZuordnung mit AEHNLICHKEITS_SCHWELLE.
+const SUCHE_OHNE_SCHWELLE = -1;
+
+// Zaehlt die gespeicherten Meldungen je Zeitfenster. Nicht atomar: bei gleichzeitigen
+// Aufrufen kann das Limit knapp ueberschritten werden, als Bremse reicht das.
+async function zaehleMeldungen(fensterSekunden: number): Promise<number> {
+  const seit = new Date(Date.now() - fensterSekunden * 1000).toISOString();
+  const { count, error } = await db()
+    .from("meldungen")
+    .select("meldung_id", { count: "exact", head: true })
+    .gte("eingegangen_am", seit);
+  if (error) throw error;
+  return count ?? 0;
+}
+
 Deno.serve(endpunkt("POST", async (req) => {
+  // Vor allem anderen, damit ein Ausreisser weder Embeddings noch Klassifizierungen kostet
+  const limits = leseRateLimits((name) => Deno.env.get(name));
+  const anzahl = await Promise.all(limits.map((l) => zaehleMeldungen(l.fenster_sekunden)));
+  const bremse = pruefeRateLimit(limits, anzahl);
+  if (!bremse.ok) {
+    console.error("Rate-Limit erreicht:", bremse.fehler);
+    return json(429, { fehler: bremse.fehler }, { "Retry-After": String(bremse.retry_after) });
+  }
+
   let body: unknown;
   try {
     body = await req.json();
@@ -51,7 +81,7 @@ Deno.serve(endpunkt("POST", async (req) => {
   if (m.geruecht_id === null && vektorText !== null) {
     const suche = await db().rpc("aehnlichstes_geruecht", {
       p_embedding: vektorText,
-      p_schwelle: AEHNLICHKEITS_SCHWELLE,
+      p_schwelle: SUCHE_OHNE_SCHWELLE,
     });
     const t = suche.error ? null : parseTreffer(suche.data);
     if (t?.ok) {
@@ -75,10 +105,22 @@ Deno.serve(endpunkt("POST", async (req) => {
     neuesGeruecht = true;
   }
 
+  const protokoll = zuordnungsProtokoll(zuordnung, treffer);
   const speichern = (embedding: string | null) =>
     db()
       .from("meldungen")
-      .insert({ geruecht_id: geruechtId, text: m.text, user_id: m.user_id, embedding })
+      .insert({
+        geruecht_id: geruechtId,
+        text: m.text,
+        user_id: m.user_id,
+        standort: m.standort,
+        emotion: m.emotion,
+        quellenkette: m.quellenkette,
+        geschwaerzte_namen: m.geschwaerzte_namen,
+        embedding,
+        ...protokoll,
+        embedding_fehler: embeddingFehler,
+      })
       .select("meldung_id")
       .single();
 
