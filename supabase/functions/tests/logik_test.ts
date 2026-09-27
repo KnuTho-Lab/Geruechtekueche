@@ -2,16 +2,22 @@
 // Ausfuehren: deno test supabase/functions/tests/
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
+  ABLAUF_FUER_AGENTEN,
+  ABWEISUNGSGRUENDE,
   AEHNLICHKEITS_SCHWELLE,
   ALLGEMEINE_FEHLER,
+  baueAufrufProtokoll,
   baueEmbeddingAnfrage,
   baueGeruechteSeite,
   baueGeruechtListe,
   BEGRUENDUNG_MAX,
   EMBEDDING_DIMENSION,
   EMBEDDING_MODELL,
+  EMOTIONEN,
+  endpunktAusPfad,
   ENDPUNKTE,
   entscheideZuordnung,
+  GESCHWAERZTE_NAMEN_MAX,
   KERNAUSSAGE_MAX,
   KLASSIFIZIERUNG_FELDER,
   leseRateLimits,
@@ -27,15 +33,20 @@ import {
   parseStatusFilter,
   pruefeApiKey,
   pruefeRateLimit,
+  QUELLENKETTEN,
   RATE_LIMITS,
   SEITE_MAX,
   SEITE_STANDARD,
+  sollInDbProtokolliertWerden,
+  STANDORT_MAX,
   STATUS_WERTE,
   TEXT_MAX,
+  validiereAbweisung,
   validiereKlassifizierung,
   validiereMeldung,
   vektorAlsText,
   waehleAdminKey,
+  zuordnungsProtokoll,
 } from "../_shared/logik.ts";
 
 // --- parseStatusFilter -------------------------------------------------------
@@ -85,20 +96,98 @@ Deno.test("geruecht_id: ungueltige Werte", () => {
 
 // --- validiereMeldung --------------------------------------------------------
 
+const OHNE_ZUSATZ = { standort: null, emotion: null, quellenkette: null, geschwaerzte_namen: null };
+
 Deno.test("meldung: Minimalfall nur text", () => {
   assertEquals(validiereMeldung({ text: "X wird aufgelöst" }), {
     ok: true,
-    wert: { text: "X wird aufgelöst", user_id: null, geruecht_id: null },
+    wert: { text: "X wird aufgelöst", user_id: null, geruecht_id: null, ...OHNE_ZUSATZ },
   });
 });
 
-Deno.test("meldung: alle Felder, Text wird getrimmt", () => {
-  const e = validiereMeldung({ text: "  X  ", user_id: "u1", geruecht_id: 3 });
-  assertEquals(e, { ok: true, wert: { text: "X", user_id: "u1", geruecht_id: 3 } });
+Deno.test("meldung: alle Felder, Texte werden getrimmt", () => {
+  const e = validiereMeldung({
+    text: "  X  ",
+    user_id: "u1",
+    geruecht_id: 3,
+    standort: " Werk B ",
+    emotion: "besorgt",
+    quellenkette: "weitererzählt",
+    geschwaerzte_namen: 2,
+  });
+  assertEquals(e, {
+    ok: true,
+    wert: {
+      text: "X",
+      user_id: "u1",
+      geruecht_id: 3,
+      standort: "Werk B",
+      emotion: "besorgt",
+      quellenkette: "weitererzählt",
+      geschwaerzte_namen: 2,
+    },
+  });
 });
 
 Deno.test("meldung: null bei optionalen Feldern ist erlaubt", () => {
-  assert(validiereMeldung({ text: "X", user_id: null, geruecht_id: null }).ok);
+  assert(validiereMeldung({ text: "X", user_id: null, geruecht_id: null, ...OHNE_ZUSATZ }).ok);
+});
+
+Deno.test("meldung: jeder Wert der festen Listen ist erlaubt", () => {
+  for (const emotion of EMOTIONEN) assert(validiereMeldung({ text: "X", emotion }).ok, emotion);
+  for (const quellenkette of QUELLENKETTEN) assert(validiereMeldung({ text: "X", quellenkette }).ok, quellenkette);
+});
+
+Deno.test("meldung: ungueltige Zusatzfelder -> Fehler, alle gesammelt", () => {
+  const e = validiereMeldung({
+    text: "X",
+    standort: "x".repeat(STANDORT_MAX + 1),
+    emotion: "wütend",
+    quellenkette: "Flurfunk",
+    geschwaerzte_namen: 1.5,
+  });
+  assert(!e.ok);
+  if (!e.ok) assertEquals(e.fehler.length, 4);
+  assert(validiereMeldung({ text: "X", standort: "x".repeat(STANDORT_MAX) }).ok);
+  assert(!validiereMeldung({ text: "X", standort: "   " }).ok);
+  assert(!validiereMeldung({ text: "X", geschwaerzte_namen: -1 }).ok);
+  assert(!validiereMeldung({ text: "X", geschwaerzte_namen: GESCHWAERZTE_NAMEN_MAX + 1 }).ok);
+  assert(validiereMeldung({ text: "X", geschwaerzte_namen: 0 }).ok);
+  assert(!validiereMeldung({ text: "X", emotion: 3 }).ok);
+});
+
+// --- validiereAbweisung ------------------------------------------------------
+
+Deno.test("abweisung: jeder bekannte Grund ist erlaubt", () => {
+  for (const grund of ABWEISUNGSGRUENDE) {
+    assertEquals(validiereAbweisung({ grund }), { ok: true, wert: { grund } });
+  }
+});
+
+Deno.test("abweisung: Grund fehlt oder ist unbekannt -> Fehler", () => {
+  for (const body of [{}, { grund: null }, { grund: "egal" }, { grund: 1 }, null, [], "prompt_injection"]) {
+    assert(!validiereAbweisung(body).ok, JSON.stringify(body));
+  }
+});
+
+Deno.test("abweisung: Text wird abgelehnt, nie gespeichert", () => {
+  const e = validiereAbweisung({ grund: "beleidigung", text: "was auch immer" });
+  assert(!e.ok);
+  if (!e.ok) assert(e.fehler[0].includes("text"));
+});
+
+// Die festen Listen muessen woertlich im CHECK der Migration stehen
+Deno.test("listen: Werte in logik.ts und im CHECK der Migration stimmen ueberein", async () => {
+  const sql = await Deno.readTextFile(
+    new URL("../../migrations/20260927140100_meldung_zusatzfelder_und_abweisungen.sql", import.meta.url),
+  );
+  const check = (spalte: string) => {
+    const t = sql.match(new RegExp(`\\(${spalte} in \\(([^)]*)\\)\\)`));
+    return t ? [...t[1].matchAll(/'([^']*)'/g)].map((x) => x[1]) : null;
+  };
+  assertEquals(check("emotion"), [...EMOTIONEN]);
+  assertEquals(check("quellenkette"), [...QUELLENKETTEN]);
+  assertEquals(check("grund"), [...ABWEISUNGSGRUENDE]);
 });
 
 Deno.test("meldung: kein Objekt -> Fehler", () => {
@@ -406,6 +495,91 @@ Deno.test("calls: jeder Eintrag beschreibt seine Antwort", () => {
   for (const e of ENDPUNKTE) assert(Object.keys(e.antwort).length > 0, e.name);
 });
 
+// --- Erklaerungen fuer den Agenten -------------------------------------------
+
+Deno.test("calls: jeder Eintrag sagt, wann man ihn nutzt", () => {
+  for (const e of ENDPUNKTE) assert(e.wann_nutzen.trim().length > 0, e.name);
+});
+
+Deno.test("calls: jeder Parameter hat Typ, Beschreibung und ein Beispiel vom richtigen Typ", () => {
+  const passt = { string: "string", integer: "number", number: "number", boolean: "boolean" } as const;
+  for (const e of ENDPUNKTE) {
+    for (const p of e.parameter) {
+      const wo = `${e.name}.${p.name}`;
+      assert(p.beschreibung.length > 0, wo);
+      assertEquals(typeof p.beispiel, passt[p.typ], wo);
+      if (p.typ === "integer") assert(Number.isInteger(p.beispiel), wo);
+      if (p.werte) assert((p.werte as readonly unknown[]).includes(p.beispiel), `${wo}: Beispiel nicht in werte`);
+      assertEquals(p.ort, e.methode === "GET" ? "query" : "body", wo);
+    }
+  }
+});
+
+const VALIDATOREN: Record<string, (b: unknown) => { ok: boolean }> = {
+  meldung: validiereMeldung,
+  klassifizierung_setzen: validiereKlassifizierung,
+  abweisung: validiereAbweisung,
+};
+
+Deno.test("calls: jeder POST-Endpunkt hat einen Validator fuer seine Beispiele", () => {
+  for (const e of ENDPUNKTE.filter((e) => e.methode === "POST")) assert(e.name in VALIDATOREN, e.name);
+});
+
+Deno.test("calls: Beispiel-Aufruf jedes POST-Endpunkts ist gueltig und nutzt nur bekannte Felder", () => {
+  for (const e of ENDPUNKTE.filter((e) => e.methode === "POST")) {
+    const body = e.beispiel_aufruf?.body;
+    assert(body, `${e.name}: kein Beispiel`);
+    assert(VALIDATOREN[e.name](body).ok, `${e.name}: Beispiel ungueltig`);
+    const namen = e.parameter.map((p) => p.name);
+    for (const feld of Object.keys(body)) assert(namen.includes(feld), `${e.name}: ${feld}`);
+    for (const p of e.parameter.filter((p) => p.pflicht)) assert(p.name in body, `${e.name}: ${p.name} fehlt`);
+  }
+});
+
+Deno.test("calls: alle Parameter-Beispiele eines POST-Endpunkts zusammen sind gueltig", () => {
+  for (const e of ENDPUNKTE.filter((e) => e.methode === "POST")) {
+    const body = Object.fromEntries(e.parameter.map((p) => [p.name, p.beispiel]));
+    assert(VALIDATOREN[e.name](body).ok, e.name);
+  }
+});
+
+Deno.test("calls: Beispiel-Aufrufe der GET-Endpunkte mit Parametern sind gueltig", () => {
+  for (const e of ENDPUNKTE.filter((e) => e.methode === "GET")) {
+    const query = e.beispiel_aufruf?.query;
+    if (e.parameter.length === 0) {
+      assertEquals(e.beispiel_aufruf, null, e.name);
+      continue;
+    }
+    assert(query, `${e.name}: kein Beispiel`);
+    const namen = e.parameter.map((p) => p.name);
+    for (const feld of Object.keys(query)) assert(namen.includes(feld), `${e.name}: ${feld}`);
+    for (const p of e.parameter.filter((p) => p.pflicht)) assert(p.name in query, `${e.name}: ${p.name} fehlt`);
+  }
+  const g = ENDPUNKTE.find((e) => e.name === "geruechte")!.beispiel_aufruf!.query!;
+  assert(parseStatusFilter(g.status).ok);
+  assert(parsePaginierung(g.limit, g.offset).ok);
+  const s = ENDPUNKTE.find((e) => e.name === "status")!.beispiel_aufruf!.query!;
+  assert(parseGeruechtId(s.geruecht_id).ok);
+});
+
+Deno.test("calls: Wertelisten im Katalog sind die des Meldungsschemas und der Pruefung", () => {
+  const meldung = ENDPUNKTE.find((e) => e.name === "meldung")!;
+  const props = MELDUNGSSCHEMA.properties as Record<string, { enum?: unknown[] }>;
+  for (const p of meldung.parameter.filter((p) => p.werte)) {
+    assertEquals([...p.werte!, null], props[p.name].enum, p.name);
+  }
+  const status = ENDPUNKTE.find((e) => e.name === "geruechte")!.parameter.find((p) => p.name === "status")!;
+  assertEquals(status.werte, ["all", ...STATUS_WERTE]);
+});
+
+Deno.test("calls: der Ablauf nennt nur Endpunkte, die es mit dieser Methode gibt", () => {
+  const genannt = ABLAUF_FUER_AGENTEN.flatMap((s) => [...s.matchAll(/\b(GET|POST) ([a-z_]+)/g)]);
+  assert(genannt.length >= 4);
+  for (const [, methode, name] of genannt) {
+    assert(ENDPUNKTE.some((e) => e.name === name && e.methode === methode), `${methode} ${name}`);
+  }
+});
+
 Deno.test("calls: Parameter von meldung sind genau die Felder des Meldungsschemas", () => {
   const meldung = ENDPUNKTE.find((e) => e.name === "meldung")!;
   assertEquals(meldung.parameter.map((p) => p.name).sort(), Object.keys(MELDUNGSSCHEMA.properties).sort());
@@ -589,4 +763,73 @@ Deno.test("seite: ungueltige Werte -> Fehler, beide gesammelt", () => {
   const beide = parsePaginierung("0", "-1");
   assert(!beide.ok);
   if (!beide.ok) assertEquals(beide.fehler.length, 2);
+});
+
+// --- Logging -----------------------------------------------------------------
+
+Deno.test("protokoll: Endpunkt aus dem Pfad, mit und ohne /functions/v1", () => {
+  assertEquals(endpunktAusPfad("/calls"), "calls");
+  assertEquals(endpunktAusPfad("/meldung/"), "meldung");
+  assertEquals(endpunktAusPfad("/functions/v1/geruechte"), "geruechte");
+  assertEquals(endpunktAusPfad("/"), "unbekannt");
+  assertEquals(endpunktAusPfad(""), "unbekannt");
+});
+
+Deno.test("protokoll: Eintrag mit gerundeter Dauer, nie negativ, Laengen begrenzt", () => {
+  assertEquals(baueAufrufProtokoll("/status", "GET", 404, 12.6), {
+    endpunkt: "status",
+    methode: "GET",
+    status: 404,
+    dauer_ms: 13,
+  });
+  assertEquals(baueAufrufProtokoll("/calls", "GET", 200, -3).dauer_ms, 0);
+  const lang = baueAufrufProtokoll("/" + "x".repeat(300), "PROPFINDXYZ", 405, 1);
+  assertEquals(lang.endpunkt.length, 100);
+  assertEquals(lang.methode.length, 10);
+});
+
+Deno.test("protokoll: der Eintrag traegt keinen Inhalt, nur die vier Felder", () => {
+  assertEquals(Object.keys(baueAufrufProtokoll("/meldung", "POST", 201, 5)).sort(), [
+    "dauer_ms",
+    "endpunkt",
+    "methode",
+    "status",
+  ]);
+});
+
+Deno.test("protokoll: abgelehnte Aufrufe (401, 405) nicht in die Datenbank, alles andere schon", () => {
+  for (const s of [401, 405]) assertEquals(sollInDbProtokolliertWerden(s), false, String(s));
+  for (const s of [200, 201, 400, 404, 409, 429, 500]) assertEquals(sollInDbProtokolliertWerden(s), true, String(s));
+});
+
+Deno.test("zuordnungsprotokoll: explizit ohne Suche", () => {
+  assertEquals(zuordnungsProtokoll(entscheideZuordnung(5, null), null), {
+    zuordnung_art: "explizit",
+    beste_aehnlichkeit: null,
+  });
+});
+
+Deno.test("zuordnungsprotokoll: per Embedding mit der Aehnlichkeit des Treffers", () => {
+  const treffer = { geruecht_id: 3, aehnlichkeit: 0.91 };
+  assertEquals(zuordnungsProtokoll(entscheideZuordnung(null, treffer), treffer), {
+    zuordnung_art: "embedding",
+    beste_aehnlichkeit: 0.91,
+  });
+});
+
+Deno.test("zuordnungsprotokoll: neu, aber die beste Aehnlichkeit unter der Schwelle bleibt erhalten", () => {
+  const treffer = { geruecht_id: 3, aehnlichkeit: 0.66 };
+  assertEquals(zuordnungsProtokoll(entscheideZuordnung(null, treffer), treffer), {
+    zuordnung_art: "neu",
+    beste_aehnlichkeit: 0.66,
+  });
+  assertEquals(zuordnungsProtokoll(entscheideZuordnung(null, null), null), {
+    zuordnung_art: "neu",
+    beste_aehnlichkeit: null,
+  });
+});
+
+Deno.test("zuordnungsprotokoll: bei expliziter geruecht_id zaehlt kein Suchtreffer", () => {
+  const treffer = { geruecht_id: 3, aehnlichkeit: 0.95 };
+  assertEquals(zuordnungsProtokoll(entscheideZuordnung(5, treffer), treffer).beste_aehnlichkeit, null);
 });

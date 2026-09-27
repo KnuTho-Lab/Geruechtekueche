@@ -56,17 +56,26 @@ def aufruf(methode, pfad, body=None, key=KEY, roh=None, query=None):
 class EndpunkteTest(unittest.TestCase):
     meldungen = []
     neue_geruechte = []
+    start = None
+
+    @classmethod
+    def setUpClass(cls):
+        # Ab hier stammen die Eintraege in api_aufrufe von diesem Testlauf
+        cls.start = sql("select now()::text as t;")[0]["t"]
 
     @classmethod
     def tearDownClass(cls):
-        if not cls.meldungen and not cls.neue_geruechte:
-            return
         ids_m = ",".join(str(i) for i in cls.meldungen) or "0"
         ids_g = ",".join(str(i) for i in cls.neue_geruechte) or "0"
+        # Das Anstoss-Protokoll verschwindet per ON DELETE CASCADE mit dem Geruecht.
+        # Aufrufe echter Nutzer im selben Zeitfenster wuerden mitgeloescht, das ist bei
+        # Testlaeufen in Kauf genommen.
         sql = (
             f"delete from meldungen where meldung_id in ({ids_m}) and text like '[TEST]%';\n"
             f"delete from geruechte g where geruecht_id in ({ids_g}) "
             f"and not exists (select 1 from meldungen m where m.geruecht_id = g.geruecht_id);\n"
+            f"delete from api_aufrufe where zeitpunkt >= '{cls.start}';\n"
+            f"delete from abweisungen where zeitpunkt >= '{cls.start}';\n"
         )
         with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False, encoding="utf-8") as f:
             f.write(sql)
@@ -94,7 +103,7 @@ class EndpunkteTest(unittest.TestCase):
     def test_ohne_oder_mit_falschem_schluessel_401(self):
         for name, methode in [("calls", "GET"), ("kategorien", "GET"), ("geruechte", "GET"),
                               ("status", "GET"), ("meldungsschema", "GET"), ("meldung", "POST"),
-                              ("klassifizierung_setzen", "POST")]:
+                              ("klassifizierung_setzen", "POST"), ("abweisung", "POST")]:
             with self.subTest(name=name):
                 self.assertEqual(aufruf(methode, name, key=None)[0], 401)
                 self.assertEqual(aufruf(methode, name, key="falsch")[0], 401)
@@ -109,17 +118,64 @@ class EndpunkteTest(unittest.TestCase):
         status, a = aufruf("GET", "calls")
         self.assertEqual(status, 200)
         self.assertEqual(sorted(e["name"] for e in a["endpunkte"]),
-                         ["calls", "geruechte", "kategorien", "klassifizierung_setzen", "meldung",
-                          "meldungsschema", "status"])
+                         ["abweisung", "calls", "geruechte", "kategorien", "klassifizierung_setzen",
+                          "meldung", "meldungsschema", "status"])
         self.assertEqual(sorted(a["allgemeine_fehler"]), ["401", "405", "500"])
-        self.assertEqual(sorted(a), ["allgemeine_fehler", "ausgehende_aufrufe", "authentifizierung",
-                                     "basis_url", "endpunkte"])
+        self.assertEqual(sorted(a), ["ablauf_fuer_agenten", "allgemeine_fehler", "ausgehende_aufrufe",
+                                     "authentifizierung", "basis_url", "endpunkte", "protokollierung"])
+        self.assertGreaterEqual(len(a["ablauf_fuer_agenten"]), 4)
         for e in a["endpunkte"]:
             self.assertIn(e["erfolg"], (200, 201), e["name"])
             self.assertTrue(e["antwort"], e["name"])
+            self.assertTrue(e["wann_nutzen"], e["name"])
+            for p in e["parameter"]:
+                self.assertIn(p["typ"], ("string", "integer", "number", "boolean"), p["name"])
+                self.assertIn("beispiel", p)
+        # Das Beispiel aus dem Katalog wird vom echten Endpunkt angenommen (hier: abweisung,
+        # weil es nichts ausser einer Zeile ohne Inhalt anlegt)
+        abw = next(e for e in a["endpunkte"] if e["name"] == "abweisung")
+        status, _ = aufruf("POST", "abweisung", abw["beispiel_aufruf"]["body"])
+        self.assertEqual(status, 201)
         # Der Katalog beschreibt sich selbst richtig
         calls = next(e for e in a["endpunkte"] if e["name"] == "calls")
         self.assertEqual(sorted(calls["antwort"]), sorted(a))
+
+    # --- Protokolle -----------------------------------------------------------
+
+    def test_aufrufe_werden_ohne_inhalt_protokolliert(self):
+        vorher = sql("select coalesce(max(aufruf_id), 0) as id from api_aufrufe;")[0]["id"]
+        self.assertEqual(aufruf("GET", "status", query={"geruecht_id": 999999999})[0], 404)
+        self.assertEqual(aufruf("GET", "kategorien", key="falsch")[0], 401)
+        # Gezielt gefiltert: echter Verkehr im selben Moment soll den Test nicht stoeren
+        zeilen = sql(f"select endpunkt, methode, status, dauer_ms from api_aufrufe "
+                     f"where aufruf_id > {int(vorher)} and endpunkt = 'status' and status = 404;")
+        self.assertEqual([(z["endpunkt"], z["methode"], z["status"]) for z in zeilen], [("status", "GET", 404)])
+        self.assertGreaterEqual(zeilen[0]["dauer_ms"], 0)
+        # Abgelehnte Aufrufe stehen nie in der Tabelle, nur im Function-Log
+        self.assertEqual(sql("select count(*) as n from api_aufrufe where status in (401, 405);")[0]["n"], 0)
+
+    def test_abweisung_nur_mit_grund(self):
+        status, a = aufruf("POST", "abweisung", {"grund": "prompt_injection"})
+        self.assertEqual(status, 201, a)
+        self.assertEqual(a["grund"], "prompt_injection")
+        zeile = sql(f"select grund from abweisungen where abweisung_id = {int(a['abweisung_id'])};")
+        self.assertEqual(zeile, [{"grund": "prompt_injection"}])
+        # Text wird nie angenommen, unbekannte Gruende auch nicht
+        self.assertEqual(aufruf("POST", "abweisung", {"grund": "beleidigung", "text": "[TEST] x"})[0], 400)
+        self.assertEqual(aufruf("POST", "abweisung", {"grund": "egal"})[0], 400)
+
+    def test_meldung_mit_zusatzfeldern(self):
+        # Themenfremder Text, damit er nicht per Embedding in ein echtes Geruecht rutscht
+        a = self.neue_meldung(text="Der Fuhrpark bekommt ab Herbst nur noch Lastenräder",
+                              standort="Verwaltungsbau", emotion="verärgert",
+                              quellenkette="von Beteiligten gehört", geschwaerzte_namen=1)
+        z = sql(f"select standort, emotion, quellenkette, geschwaerzte_namen from meldungen "
+                f"where meldung_id = {int(a['meldung_id'])};")[0]
+        self.assertEqual(z, {"standort": "Verwaltungsbau", "emotion": "verärgert",
+                             "quellenkette": "von Beteiligten gehört", "geschwaerzte_namen": 1})
+        status, f = aufruf("POST", "meldung", {"text": "[TEST] x", "emotion": "wütend"})
+        self.assertEqual(status, 400)
+        self.assertIn("emotion", f["fehler"][0])
 
     def test_kategorien(self):
         status, a = aufruf("GET", "kategorien")
@@ -212,11 +268,28 @@ class EndpunkteTest(unittest.TestCase):
                     f"where meldung_id = {int(zweite['meldung_id'])};")[0]
         self.assertIs(zeile["hat_embedding"], True)
 
+        # Zuordnung steht an der Meldung, das Geruecht hat Anlagezeit und einen Anstoss
+        zeilen = sql(f"select meldung_id, zuordnung_art, beste_aehnlichkeit, embedding_fehler "
+                     f"from meldungen where geruecht_id = {int(gid)} order by meldung_id;")
+        self.assertEqual([z["zuordnung_art"] for z in zeilen], ["neu", "explizit"])
+        self.assertIsNone(zeilen[1]["beste_aehnlichkeit"])  # explizit: nicht gesucht
+        self.assertEqual([z["embedding_fehler"] for z in zeilen], [None, None])
+        g = sql(f"select angelegt_am is not null as hat_zeit, "
+                f"(select count(*) from klassifizierung_anstoesse a where a.geruecht_id = g.geruecht_id) as anstoesse, "
+                f"(select count(*) from klassifizierung_anstoesse a where a.geruecht_id = g.geruecht_id "
+                f"and a.request_id is not null) as verschickt "
+                f"from geruechte g where geruecht_id = {int(gid)};")[0]
+        self.assertIs(g["hat_zeit"], True)
+        self.assertEqual((g["anstoesse"], g["verschickt"]), (1, 1))
+
         status, a = aufruf("GET", "geruechte", query={"status": "offen"})
         self.assertEqual(status, 200)
         eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == gid)
         self.assertEqual(eintrag["anzahl_meldungen"], 2)
-        self.assertIsNone(eintrag["kategorie"])  # noch nicht klassifiziert
+        # Der echte n8n-Klassifizierer laeuft mit und ist manchmal schneller als der Test:
+        # entweder noch leer oder eine gueltige Kategorie
+        kategorien = aufruf("GET", "kategorien")[1]["kategorien"]
+        self.assertIn(eintrag["kategorie"], [None, *kategorien])
         self.assertEqual(eintrag["beispieltext"], "[TEST] Abteilung X wird aufgelöst")
 
     def test_embedding_aehnliche_meldungen_landen_im_selben_geruecht(self):
@@ -249,6 +322,16 @@ class EndpunkteTest(unittest.TestCase):
         zeilen = sql(f"select extensions.vector_dims(embedding) as dim from meldungen "
                      f"where meldung_id in ({ids});")
         self.assertEqual([z["dim"] for z in zeilen], [3072, 3072, 3072])
+
+        # Zuordnung samt bester Aehnlichkeit, auch unter der Schwelle, steht an der Meldung
+        zeilen = {z["meldung_id"]: z for z in sql(
+            f"select meldung_id, zuordnung_art, beste_aehnlichkeit from meldungen where meldung_id in ({ids});")}
+        z2, z3 = zeilen[zweite["meldung_id"]], zeilen[dritte["meldung_id"]]
+        self.assertEqual(z2["zuordnung_art"], "embedding")
+        self.assertAlmostEqual(z2["beste_aehnlichkeit"], zweite["aehnlichkeit"], places=6)
+        self.assertEqual(z3["zuordnung_art"], "neu")
+        self.assertIsNotNone(z3["beste_aehnlichkeit"])
+        self.assertLess(z3["beste_aehnlichkeit"], 0.8)
 
         status, a = aufruf("GET", "geruechte", query={"status": "all"})
         self.assertEqual(status, 200)
