@@ -662,6 +662,15 @@ Deno.test("calls: Antwort von kategorien beschreibt genau Liste und Eintrag", ()
   assertEquals(Object.keys(k.antwort).sort(), erwartet.sort());
 });
 
+// Zwei Fremdschluessel von geruechte zeigen auf kategorien(kategorie_id). Ein Spaltenname als
+// Hinweis (kategorien!kategorie_id) trifft dann beide, PostgREST bricht mit PGRST201 ab
+// (live gemessen 2026-09-28). Eindeutig ist nur der Constraint-Name.
+Deno.test("geruechte: jede Einbettung von kategorien nennt den Fremdschluessel per Constraint-Namen", async () => {
+  const code = (await functionCode("geruechte")).split("\n").filter((z) => !z.trim().startsWith("//")).join("\n");
+  const einbettungen = [...code.matchAll(/kategorien(!?[a-z_]*)\(/g)].map((t) => t[1]);
+  assertEquals(einbettungen, ["!geruechte_kategorie_id_fkey", "!geruechte_zweitkategorie_id_fkey"]);
+});
+
 Deno.test("meldungsschema: Fehlerliste ist die aus dem Katalog, samt allgemeinen Fehlern", () => {
   const meldung = ENDPUNKTE.find((e) => e.name === "meldung")!;
   assertEquals(MELDUNG_FEHLER, { ...meldung.fehler, ...ALLGEMEINE_FEHLER });

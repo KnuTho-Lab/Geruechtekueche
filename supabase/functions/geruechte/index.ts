@@ -16,9 +16,11 @@ Deno.serve(endpunkt("GET", async (req) => {
   let abfrage = db()
     .from("geruechte")
     .select(
-      // Zwei Fremdschluessel zeigen auf kategorien, deshalb mit Spaltenhinweis (!spalte),
-      // sonst bricht PostgREST mit "more than one relationship" ab
-      "geruecht_id, status, kernaussage, kategorien!kategorie_id(name), zweit:kategorien!zweitkategorie_id(name), " +
+      // Zwei Fremdschluessel zeigen auf kategorien, deshalb mit Constraint-Namen als Hinweis.
+      // Ein Spaltenname reicht nicht: beide zeigen auf kategorien(kategorie_id), der Hinweis
+      // !kategorie_id traefe beide und PostgREST bricht mit PGRST201 ab
+      "geruecht_id, status, kernaussage, kategorien!geruechte_kategorie_id_fkey(name), " +
+        "zweit:kategorien!geruechte_zweitkategorie_id_fkey(name), " +
         "zweitkategorie_konfidenz, anzahl:meldungen(count), erste:meldungen(text, eingegangen_am)",
       { count: "exact" },
     )
