@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gerüchteküche HQ</title>
+<meta name="description" content="HQ-Dashboard der Gerüchteküche: Trends, kritische Gerüchte und Systemstatistik. Bald verfügbar.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  /* Platzhalter-Dashboard: alle Zahlen und Diagramme sind Illustration, keine echten Daten.
+     Kein API-Key im Browser, keine Abfragen. */
+  :root {
+    --bg: #f5f3ef;
+    --surface: #ffffff;
+    --surface-2: #faf8f5;
+    --border: #e6e1d8;
+    --text: #1f1d1a;
+    --muted: #6f6a62;
+    --faint: #b9b2a6;
+    --accent: #d9622b;
+    --accent-soft: #fbe6da;
+    --c1: #d9622b; --c2: #2f7f86; --c3: #c69214; --c4: #6b5bb5; --c5: #3f8a4d; --c6: #b8456a;
+    --skeleton: #ece7de;
+    --shadow: 0 1px 2px rgba(31,29,26,.05), 0 4px 16px rgba(31,29,26,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141312;
+      --surface: #1c1b19;
+      --surface-2: #211f1d;
+      --border: #2e2b28;
+      --text: #efebe5;
+      --muted: #a39d94;
+      --faint: #5c5751;
+      --accent: #f07a41;
+      --accent-soft: #3a2519;
+      --c1: #f07a41; --c2: #4fb0b8; --c3: #e0b13a; --c4: #9587e0; --c5: #62b573; --c6: #e06f94;
+      --skeleton: #2a2825;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+
+  /* Kopfzeile */
+  header { border-bottom: 1px solid var(--border); background: var(--surface); }
+  header .wrap { display: flex; align-items: center; gap: 12px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.01em; }
+  .brand small { font-weight: 500; color: var(--muted); }
+  .pill {
+    margin-left: auto; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--accent); background: var(--accent-soft); padding: 4px 10px; border-radius: 999px;
+  }
+
+  /* Teaser-Hero */
+  .hero { padding: 48px 0 32px; display: grid; grid-template-columns: 1fr auto; gap: 32px; align-items: center; }
+  .hero h1 { font-size: clamp(28px, 4vw, 42px); line-height: 1.1; letter-spacing: -.02em; margin: 0 0 12px; }
+  .hero p { color: var(--muted); max-width: 56ch; margin: 0; font-size: 16px; }
+  .hero .pot { width: 150px; height: 150px; }
+  .steam path { stroke: var(--faint); animation: rise 3.2s ease-in-out infinite; opacity: 0; }
+  .steam path:nth-child(2) { animation-delay: 1s; }
+  .steam path:nth-child(3) { animation-delay: 2s; }
+  @keyframes rise {
+    0% { opacity: 0; transform: translateY(8px); }
+    40% { opacity: .9; }
+    100% { opacity: 0; transform: translateY(-14px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .steam path { animation: none; opacity: .6; }
+    .shimmer::after { animation: none !important; }
+  }
+
+  /* Raster */
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; padding-bottom: 24px; }
+  .span-3 { grid-column: span 3; } .span-4 { grid-column: span 4; }
+  .span-5 { grid-column: span 5; } .span-6 { grid-column: span 6; }
+  .span-7 { grid-column: span 7; } .span-8 { grid-column: span 8; }
+  .span-12 { grid-column: span 12; }
+  @media (max-width: 960px) {
+    .span-3 { grid-column: span 6; }
+    .span-4, .span-5, .span-6, .span-7, .span-8 { grid-column: span 12; }
+    .hero { grid-template-columns: 1fr; }
+    .hero .pot { display: none; }
+  }
+  @media (max-width: 520px) { .span-3 { grid-column: span 12; } }
+
+  .section-title {
+    grid-column: span 12; margin: 16px 0 -4px; font-size: 13px; font-weight: 600;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .06em;
+  }
+
+  /* Karten */
+  .card {
+    position: relative; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 18px; box-shadow: var(--shadow); overflow: hidden; min-width: 0;
+  }
+  .card h3 { margin: 0; padding-right: 110px; font-size: 15px; font-weight: 600; }
+  .card .sub { margin: 2px 0 14px; font-size: 13px; color: var(--muted); }
+  .soon {
+    position: absolute; top: 14px; right: 14px; font-size: 11px; font-weight: 600;
+    letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+    border: 1px dashed var(--faint); padding: 2px 8px; border-radius: 999px; background: var(--surface);
+  }
+  .demo { opacity: .55; filter: saturate(.75); }
+
+  /* KPI-Kacheln */
+  .kpi .label { font-size: 13px; color: var(--muted); margin-bottom: 8px; padding-right: 90px; }
+  .kpi .value {
+    font: 500 30px/1 "JetBrains Mono", ui-monospace, monospace; color: var(--faint); letter-spacing: -.02em;
+  }
+  .kpi .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .kpi svg { display: block; margin-top: 10px; width: 100%; height: 34px; }
+
+  /* Skelett mit Schimmer */
+  .shimmer { position: relative; overflow: hidden; background: var(--skeleton); border-radius: 6px; }
+  .shimmer::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+    transform: translateX(-100%); animation: sweep 1.8s ease-in-out infinite;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .shimmer::after {
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.06), transparent);
+    }
+  }
+  @keyframes sweep { to { transform: translateX(100%); } }
+
+  /* Diagramm-Container mit fester Höhe */
+  .chart { width: 100%; height: 220px; display: block; }
+  .axis text { fill: var(--muted); font-size: 11px; font-family: Inter, sans-serif; }
+  .axis line { stroke: var(--border); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 12px; font-size: 13px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  .donut-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  .donut-wrap svg { width: 170px; height: 170px; flex: none; }
+  .donut-wrap .legend { flex-direction: column; margin: 0; }
+
+  /* Listen */
+  .rows { display: grid; gap: 10px; }
+  .row { display: grid; grid-template-columns: 28px 1fr 60px; gap: 12px; align-items: center; }
+  .row .rank { font: 500 13px "JetBrains Mono", monospace; color: var(--faint); }
+  .row .line { height: 10px; }
+  .row .tag { height: 18px; border-radius: 999px; }
+
+  /* GRZ-Balken */
+  .bars { display: grid; gap: 12px; }
+  .bar { display: grid; grid-template-columns: 1fr; gap: 5px; }
+  .bar .meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+  .bar .track { height: 10px; background: var(--skeleton); border-radius: 999px; overflow: hidden; }
+  .bar .fill { height: 100%; border-radius: 999px; }
+  .formula {
+    margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2);
+    border: 1px solid var(--border); font: 500 12.5px "JetBrains Mono", monospace; color: var(--muted);
+  }
+
+  /* Heatmap */
+  .heat { display: grid; grid-template-columns: 90px repeat(7, 1fr); gap: 4px; font-size: 11px; color: var(--muted); }
+  .heat .cell { aspect-ratio: 1.6; border-radius: 4px; background: var(--c1); }
+  .heat .lbl { display: flex; align-items: center; }
+  .heat .col { text-align: center; }
+
+  /* Gestapelte Balken */
+  .stack { display: flex; height: 22px; border-radius: 6px; overflow: hidden; margin-bottom: 6px; }
+  .stack div { height: 100%; }
+  .stack-label { font-size: 12px; color: var(--muted); margin: 14px 0 6px; }
+  .stack-label:first-of-type { margin-top: 0; }
+
+  footer { border-top: 1px solid var(--border); padding: 20px 0 40px; color: var(--muted); font-size: 13px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="5" y="13" width="22" height="13" rx="4" fill="var(--accent)"/>
+        <rect x="2" y="14" width="4" height="3" rx="1.5" fill="var(--accent)"/>
+        <rect x="26" y="14" width="4" height="3" rx="1.5" fill="var(--accent)"/>
+        <rect x="4" y="10" width="24" height="3" rx="1.5" fill="var(--text)"/>
+        <path d="M11 7c0-2 2-2 2-4M16 7c0-2 2-2 2-4M21 7c0-2 2-2 2-4" stroke="var(--faint)" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      </svg>
+      Gerüchteküche <small>HQ</small>
+    </div>
+    <span class="pill">Coming soon</span>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <div>
+      <h1>Das HQ-Dashboard köchelt noch.</h1>
+      <p>Bald siehst du hier, was in der Küche brodelt: welche Gerüchte gerade aufsteigen, welche kritisch werden und wie gut Agent, Klassifizierer und Schutzmechanismen arbeiten. Alles, was du unten siehst, ist Vorschau mit Beispielwerten.</p>
+    </div>
+    <svg class="pot" viewBox="0 0 150 150" aria-hidden="true">
+      <g class="steam" fill="none" stroke-width="4" stroke-linecap="round">
+        <path d="M55 52c-6-8 6-12 0-22"/>
+        <path d="M75 48c-6-8 6-12 0-22"/>
+        <path d="M95 52c-6-8 6-12 0-22"/>
+      </g>
+      <rect x="22" y="62" width="106" height="8" rx="4" fill="var(--text)"/>
+      <path d="M28 70h94v34a26 26 0 0 1-26 26H54a26 26 0 0 1-26-26z" fill="var(--accent)"/>
+      <rect x="10" y="78" width="20" height="8" rx="4" fill="var(--accent)"/>
+      <rect x="120" y="78" width="20" height="8" rx="4" fill="var(--accent)"/>
+      <circle cx="60" cy="96" r="4" fill="var(--accent-soft)"/>
+      <circle cx="78" cy="104" r="3" fill="var(--accent-soft)"/>
+      <circle cx="92" cy="92" r="2.5" fill="var(--accent-soft)"/>
+    </svg>
+  </section>
+
+  <div class="grid">
+
+    <!-- Kennzahlen -->
+    <div class="card kpi span-3">
+      <div class="label">Meldungen heute</div>
+      <div class="value">– –</div>
+      <svg viewBox="0 0 100 34" preserveAspectRatio="none" class="demo"><polyline points="0,28 14,24 28,26 42,18 56,20 70,12 84,14 100,6" fill="none" stroke="var(--c1)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+      <div class="hint">gegenüber Vortag</div>
+      <span class="soon">Bald</span>
+    </div>
+    <div class="card kpi span-3">
+      <div class="label">Aktive Gerüchte</div>
+      <div class="value">– –</div>
+      <svg viewBox="0 0 100 34" preserveAspectRatio="none" class="demo"><polyline points="0,20 14,22 28,18 42,19 56,15 70,16 84,12 100,13" fill="none" stroke="var(--c2)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+      <div class="hint">Status offen oder in Prüfung</div>
+      <span class="soon">Bald</span>
+    </div>
+    <div class="card kpi span-3">
+      <div class="label">Kritische Gerüchte</div>
+      <div class="value">– –</div>
+      <svg viewBox="0 0 100 34" preserveAspectRatio="none" class="demo"><polyline points="0,30 14,30 28,26 42,28 56,22 70,24 84,18 100,20" fill="none" stroke="var(--c6)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+      <div class="hint">über der GRZ-Schwelle</div>
+      <span class="soon">Bald</span>
+    </div>
+    <div class="card kpi span-3">
+      <div class="label">Abgewiesene Eingaben</div>
+      <div class="value">– –</div>
+      <svg viewBox="0 0 100 34" preserveAspectRatio="none" class="demo"><polyline points="0,24 14,26 28,22 42,26 56,24 70,28 84,25 100,27" fill="none" stroke="var(--c4)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+      <div class="hint">Guardrails, ohne Text gezählt</div>
+      <span class="soon">Bald</span>
+    </div>
+
+    <h2 class="section-title">Trends</h2>
+
+    <!-- Meldungen pro Tag -->
+    <div class="card span-8">
+      <h3>Meldungen pro Tag</h3>
+      <p class="sub">Letzte 14 Tage, gruppiert in Berliner Zeit</p>
+      <svg class="chart demo" viewBox="0 0 640 220" preserveAspectRatio="none" aria-label="Beispiel-Diagramm Meldungen pro Tag">
+        <defs>
+          <linearGradient id="area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="var(--c1)" stop-opacity=".35"/>
+            <stop offset="1" stop-color="var(--c1)" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <g class="axis">
+          <line x1="0" y1="40" x2="640" y2="40"/><line x1="0" y1="100" x2="640" y2="100"/>
+          <line x1="0" y1="160" x2="640" y2="160"/><line x1="0" y1="200" x2="640" y2="200"/>
+        </g>
+        <path d="M0,170 L49,160 L98,165 L148,140 L197,150 L246,120 L295,128 L345,96 L394,110 L443,80 L492,92 L542,60 L591,70 L640,46 L640,200 L0,200 Z" fill="url(#area)"/>
+        <polyline points="0,170 49,160 98,165 148,140 197,150 246,120 295,128 345,96 394,110 443,80 492,92 542,60 591,70 640,46" fill="none" stroke="var(--c1)" stroke-width="2.5" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <span class="soon">Coming soon</span>
+    </div>
+
+    <!-- Kategorien -->
+    <div class="card span-4">
+      <h3>Verteilung nach Kategorie</h3>
+      <p class="sub">Aktive Gerüchte je Themenfeld</p>
+      <div class="donut-wrap">
+        <svg viewBox="0 0 42 42" class="demo" aria-label="Beispiel-Diagramm Kategorien">
+          <g fill="none" stroke-width="7" transform="rotate(-90 21 21)">
+            <circle r="15.9155" cx="21" cy="21" stroke="var(--c1)" stroke-dasharray="26 74" stroke-dashoffset="0"/>
+            <circle r="15.9155" cx="21" cy="21" stroke="var(--c2)" stroke-dasharray="21 79" stroke-dashoffset="-26"/>
+            <circle r="15.9155" cx="21" cy="21" stroke="var(--c3)" stroke-dasharray="18 82" stroke-dashoffset="-47"/>
+            <circle r="15.9155" cx="21" cy="21" stroke="var(--c4)" stroke-dasharray="15 85" stroke-dashoffset="-65"/>
+            <circle r="15.9155" cx="21" cy="21" stroke="var(--c5)" stroke-dasharray="12 88" stroke-dashoffset="-80"/>
+            <circle r="15.9155" cx="21" cy="21" stroke="var(--c6)" stroke-dasharray="8 92" stroke-dashoffset="-92"/>
+          </g>
+        </svg>
+        <div class="legend">
+          <span><i style="background:var(--c1)"></i>Standort</span>
+          <span><i style="background:var(--c2)"></i>Personal</span>
+          <span><i style="background:var(--c3)"></i>Vergütung</span>
+          <span><i style="background:var(--c4)"></i>Organisation</span>
+          <span><i style="background:var(--c5)"></i>Produkt</span>
+          <span><i style="background:var(--c6)"></i>Sicherheit</span>
+        </div>
+      </div>
+      <span class="soon">Coming soon</span>
+    </div>
+
+    <!-- Aufsteiger -->
+    <div class="card span-5">
+      <h3>Aufsteiger</h3>
+      <p class="sub">Meldungen der letzten 24 h gegen den 7-Tage-Schnitt</p>
+      <div class="rows">
+        <div class="row"><span class="rank">01</span><div class="line shimmer" style="width:88%"></div><div class="tag shimmer"></div></div>
+        <div class="row"><span class="rank">02</span><div class="line shimmer" style="width:72%"></div><div class="tag shimmer"></div></div>
+        <div class="row"><span class="rank">03</span><div class="line shimmer" style="width:80%"></div><div class="tag shimmer"></div></div>
+        <div class="row"><span class="rank">04</span><div class="line shimmer" style="width:60%"></div><div class="tag shimmer"></div></div>
+        <div class="row"><span class="rank">05</span><div class="line shimmer" style="width:68%"></div><div class="tag shimmer"></div></div>
+      </div>
+      <span class="soon">Coming soon</span>
+    </div>
+
+    <!-- Kritische Gerüchte -->
+    <div class="card span-7">
+      <h3>Kritische Gerüchte</h3>
+      <p class="sub">Rangfolge nach Gerüchte-Risikozahl</p>
+      <div class="bars demo">
+        <div class="bar"><div class="meta"><span>Gerücht A</span><span>GRZ ···</span></div><div class="track"><div class="fill" style="width:86%;background:var(--c6)"></div></div></div>
+        <div class="bar"><div class="meta"><span>Gerücht B</span><span>GRZ ···</span></div><div class="track"><div class="fill" style="width:68%;background:var(--c6)"></div></div></div>
+        <div class="bar"><div class="meta"><span>Gerücht C</span><span>GRZ ···</span></div><div class="track"><div class="fill" style="width:52%;background:var(--c3)"></div></div></div>
+        <div class="bar"><div class="meta"><span>Gerücht D</span><span>GRZ ···</span></div><div class="track"><div class="fill" style="width:34%;background:var(--c3)"></div></div></div>
+      </div>
+      <div class="formula">GRZ = Tragweite × Verbreitung × Brisanz &nbsp;(je 1 bis 10)</div>
+      <span class="soon">Coming soon</span>
+    </div>
+
+    <h2 class="section-title">Lagebild</h2>
+
+    <!-- Heatmap -->
+    <div class="card span-7">
+      <h3>Standort-Heatmap</h3>
+      <p class="sub">Meldungen je Standort und Wochentag</p>
+      <div class="heat demo" id="heat" aria-label="Beispiel-Heatmap"></div>
+      <span class="soon">Coming soon</span>
+    </div>
+
+    <!-- Stimmung -->
+    <div class="card span-5">
+      <h3>Stimmung und Quellen</h3>
+      <p class="sub">Wie Gerüchte gemeldet werden</p>
+      <div class="demo">
+        <div class="stack-label">Emotion</div>
+        <div class="stack">
+          <div style="width:34%;background:var(--c2)"></div><div style="width:24%;background:var(--c3)"></div>
+          <div style="width:16%;background:var(--c6)"></div><div style="width:14%;background:var(--c1)"></div>
+          <div style="width:12%;background:var(--c5)"></div>
+        </div>
+        <div class="legend">
+          <span><i style="background:var(--c2)"></i>neutral</span><span><i style="background:var(--c3)"></i>besorgt</span>
+          <span><i style="background:var(--c6)"></i>ängstlich</span><span><i style="background:var(--c1)"></i>verärgert</span>
+          <span><i style="background:var(--c5)"></i>hoffnungsvoll</span>
+        </div>
+        <div class="stack-label" style="margin-top:18px">Quellenkette</div>
+        <div class="stack">
+          <div style="width:22%;background:var(--c4)"></div><div style="width:30%;background:var(--c2)"></div>
+          <div style="width:36%;background:var(--c3)"></div><div style="width:12%;background:var(--faint)"></div>
+        </div>
+        <div class="legend">
+          <span><i style="background:var(--c4)"></i>selbst erlebt</span><span><i style="background:var(--c2)"></i>von Beteiligten</span>
+          <span><i style="background:var(--c3)"></i>weitererzählt</span><span><i style="background:var(--faint)"></i>unbekannt</span>
+        </div>
+      </div>
+      <span class="soon">Coming soon</span>
+    </div>
+
+    <h2 class="section-title">System</h2>
+
+    <div class="card kpi span-3">
+      <div class="label">API-Aufrufe heute</div>
+      <div class="value">– –</div>
+      <div class="hint">je Endpunkt aufschlüsselbar</div>
+      <span class="soon">Bald</span>
+    </div>
+    <div class="card kpi span-3">
+      <div class="label">Fehlerquote</div>
+      <div class="value">– – %</div>
+      <div class="hint">inkl. Rate-Limit-Treffer</div>
+      <span class="soon">Bald</span>
+    </div>
+    <div class="card kpi span-3">
+      <div class="label">Antwortzeit (Median)</div>
+      <div class="value">– – ms</div>
+      <div class="hint">über alle Endpunkte</div>
+      <span class="soon">Bald</span>
+    </div>
+    <div class="card kpi span-3">
+      <div class="label">Klassifizierung</div>
+      <div class="value">– – s</div>
+      <div class="hint">Durchlaufzeit, hängende Fälle</div>
+      <span class="soon">Bald</span>
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Vorschau: alle Werte und Diagramme sind Beispiele, keine echten Daten.</span>
+    <span>Gerüchteküche · Knut &amp; Thomas</span>
+  </div>
+</footer>
+
+<script>
+  // Beispiel-Heatmap: feste Pseudo-Zufallswerte, damit die Vorschau bei jedem Laden gleich aussieht.
+  (function () {
+    var heat = document.getElementById('heat');
+    var tage = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+    var standorte = ['Standort 1', 'Standort 2', 'Standort 3', 'Standort 4', 'Standort 5'];
+    var seed = 7;
+    function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+    var html = '<span></span>' + tage.map(function (t) { return '<span class="col">' + t + '</span>'; }).join('');
+    standorte.forEach(function (s) {
+      html += '<span class="lbl">' + s + '</span>';
+      tage.forEach(function (t, i) {
+        var wochenende = i >= 5 ? 0.35 : 1;
+        var o = (0.12 + rnd() * 0.88 * wochenende).toFixed(2);
+        html += '<div class="cell" style="opacity:' + o + '"></div>';
+      });
+    });
+    heat.innerHTML = html;
+  })();
+</script>
+</body>
+</html>
