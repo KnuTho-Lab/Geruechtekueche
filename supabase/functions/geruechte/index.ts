@@ -16,7 +16,10 @@ Deno.serve(endpunkt("GET", async (req) => {
   let abfrage = db()
     .from("geruechte")
     .select(
-      "geruecht_id, status, kernaussage, kategorien(name), anzahl:meldungen(count), erste:meldungen(text, eingegangen_am)",
+      // Zwei Fremdschluessel zeigen auf kategorien, deshalb mit Spaltenhinweis (!spalte),
+      // sonst bricht PostgREST mit "more than one relationship" ab
+      "geruecht_id, status, kernaussage, kategorien!kategorie_id(name), zweit:kategorien!zweitkategorie_id(name), " +
+        "zweitkategorie_konfidenz, anzahl:meldungen(count), erste:meldungen(text, eingegangen_am)",
       { count: "exact" },
     )
     .order("eingegangen_am", { referencedTable: "erste", ascending: true })

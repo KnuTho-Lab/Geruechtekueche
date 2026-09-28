@@ -10,6 +10,7 @@ import {
   baueEmbeddingAnfrage,
   baueGeruechteSeite,
   baueGeruechtListe,
+  baueKategorienListe,
   BEGRUENDUNG_MAX,
   EMBEDDING_DIMENSION,
   EMBEDDING_MODELL,
@@ -46,6 +47,7 @@ import {
   validiereMeldung,
   vektorAlsText,
   waehleAdminKey,
+  ZWEITKATEGORIE_AB,
   zuordnungsProtokoll,
 } from "../_shared/logik.ts";
 
@@ -248,6 +250,8 @@ Deno.test("klassifizierung: Minimalfall, Texte getrimmt, Protokollfelder mit Sta
         konfidenz: null,
         begruendung: null,
         manuell_pruefen: false,
+        zweitkategorie: null,
+        zweitkonfidenz: null,
       },
     },
   );
@@ -296,6 +300,47 @@ Deno.test("klassifizierung: unbekannte Felder werden abgelehnt", () => {
   const e = validiereKlassifizierung({ geruecht_id: 7, kategorie: "Organisation", kernaussage: "X", sicherheit: 0.9 });
   assert(!e.ok);
   assert(e.fehler[0].includes("sicherheit"));
+});
+
+Deno.test("klassifizierung: Zweitkategorie samt Konfidenz wird uebernommen, getrimmt", () => {
+  const e = validiereKlassifizierung({
+    geruecht_id: 7, kategorie: "Standort", kernaussage: "X",
+    konfidenz: 0.7, zweitkategorie: " Vergütung ", zweitkonfidenz: 0.4,
+  });
+  assert(e.ok);
+  assertEquals([e.wert.zweitkategorie, e.wert.zweitkonfidenz], ["Vergütung", 0.4]);
+});
+
+Deno.test("klassifizierung: Zweitkategorie null oder weggelassen ist erlaubt", () => {
+  const basis = { geruecht_id: 7, kategorie: "Standort", kernaussage: "X", konfidenz: 0.9 };
+  assert(validiereKlassifizierung(basis).ok);
+  assert(validiereKlassifizierung({ ...basis, zweitkategorie: null, zweitkonfidenz: null }).ok);
+});
+
+Deno.test("klassifizierung: Zweitkonfidenz darf die Hauptkonfidenz erreichen, aber nicht uebersteigen", () => {
+  const basis = { geruecht_id: 7, kategorie: "Standort", kernaussage: "X", konfidenz: 0.5, zweitkategorie: "Personal" };
+  assert(validiereKlassifizierung({ ...basis, zweitkonfidenz: 0.5 }).ok);
+  assert(validiereKlassifizierung({ ...basis, zweitkonfidenz: 0 }).ok);
+  const e = validiereKlassifizierung({ ...basis, zweitkonfidenz: 0.51 });
+  assert(!e.ok);
+  assert(e.fehler[0].includes("zweitkonfidenz"));
+});
+
+Deno.test("klassifizierung: Zweitkategorie ungueltig -> Fehler", () => {
+  const basis = { geruecht_id: 7, kategorie: "Standort", kernaussage: "X", konfidenz: 0.9 };
+  // nur eines von beiden
+  assert(!validiereKlassifizierung({ ...basis, zweitkategorie: "Personal" }).ok);
+  assert(!validiereKlassifizierung({ ...basis, zweitkonfidenz: 0.3 }).ok);
+  // dieselbe wie die Hauptkategorie, auch mit Leerzeichen
+  assert(!validiereKlassifizierung({ ...basis, zweitkategorie: " Standort ", zweitkonfidenz: 0.3 }).ok);
+  // ohne Hauptkonfidenz laesst sich nichts vergleichen
+  const { konfidenz: _, ...ohneKonfidenz } = basis;
+  assert(!validiereKlassifizierung({ ...ohneKonfidenz, zweitkategorie: "Personal", zweitkonfidenz: 0.3 }).ok);
+  // falsche Typen und Grenzen
+  assert(!validiereKlassifizierung({ ...basis, zweitkategorie: "", zweitkonfidenz: 0.3 }).ok);
+  assert(!validiereKlassifizierung({ ...basis, zweitkategorie: 5, zweitkonfidenz: 0.3 }).ok);
+  assert(!validiereKlassifizierung({ ...basis, zweitkategorie: "Personal", zweitkonfidenz: -0.1 }).ok);
+  assert(!validiereKlassifizierung({ ...basis, zweitkategorie: "Personal", zweitkonfidenz: "0.3" }).ok);
 });
 
 Deno.test("klassifizierung: kein Objekt -> Fehler", () => {
@@ -610,6 +655,13 @@ Deno.test("calls: Antwort von geruechte beschreibt genau Seite und Listeneintrag
   assertEquals(Object.keys(g.antwort).sort(), erwartet);
 });
 
+Deno.test("calls: Antwort von kategorien beschreibt genau Liste und Eintrag", () => {
+  const k = ENDPUNKTE.find((e) => e.name === "kategorien")!;
+  const antwort = baueKategorienListe([{ name: "Standort", beschreibung: "Wo gearbeitet wird." }]);
+  const erwartet = [...Object.keys(antwort), ...Object.keys(antwort.kategorien[0]).map((f) => `kategorien[].${f}`)];
+  assertEquals(Object.keys(k.antwort).sort(), erwartet.sort());
+});
+
 Deno.test("meldungsschema: Fehlerliste ist die aus dem Katalog, samt allgemeinen Fehlern", () => {
   const meldung = ENDPUNKTE.find((e) => e.name === "meldung")!;
   assertEquals(MELDUNG_FEHLER, { ...meldung.fehler, ...ALLGEMEINE_FEHLER });
@@ -650,7 +702,46 @@ Deno.test("liste: Anzahl aus count, Beispieltext aus der fruehesten Meldung", ()
     anzahl_meldungen: 5,
     beispieltext: "zuerst",
     erste_meldung_am: "2026-09-25T10:00:00+00:00",
+    zweitkategorie: null,
   }]);
+});
+
+Deno.test("liste: Zweitkategorie nur, wenn uneindeutig (Zweitkonfidenz ab ZWEITKATEGORIE_AB)", () => {
+  const zeile = (konf: number | null, zweit: unknown) => ({
+    geruecht_id: 1, status: "offen", kernaussage: "x", kategorien: { name: "Standort" },
+    anzahl: null, erste: null, zweit, zweitkategorie_konfidenz: konf,
+  }) as Parameters<typeof baueGeruechtListe>[0][0];
+  const [ab, grenze, darunter, keine, alsArray] = baueGeruechtListe([
+    zeile(0.45, { name: "Vergütung" }),
+    zeile(ZWEITKATEGORIE_AB, { name: "Vergütung" }),
+    zeile(ZWEITKATEGORIE_AB - 0.01, { name: "Vergütung" }),
+    zeile(null, null),
+    zeile(0.4, [{ name: "Personal" }]),
+  ]);
+  assertEquals(ab.zweitkategorie, "Vergütung");
+  assertEquals(grenze.zweitkategorie, "Vergütung");
+  assertEquals(darunter.zweitkategorie, null);
+  assertEquals(keine.zweitkategorie, null);
+  assertEquals(alsArray.zweitkategorie, "Personal");
+});
+
+Deno.test("liste: Zweitkonfidenz als Text (numeric aus PostgREST) wird verglichen", () => {
+  const [z] = baueGeruechtListe([{
+    geruecht_id: 1, status: "offen", kernaussage: "x", kategorien: { name: "Standort" },
+    anzahl: null, erste: null, zweit: { name: "Personal" }, zweitkategorie_konfidenz: "0.4",
+  }] as Parameters<typeof baueGeruechtListe>[0]);
+  assertEquals(z.zweitkategorie, "Personal");
+});
+
+Deno.test("liste: Schwelle fuer uneindeutig ist ein sinnvoller Wert", () => {
+  assert(ZWEITKATEGORIE_AB > 0 && ZWEITKATEGORIE_AB < 0.5);
+});
+
+Deno.test("kategorien: Name und Beschreibung, Reihenfolge bleibt", () => {
+  assertEquals(
+    baueKategorienListe([{ name: "Standort", beschreibung: "a" }, { name: "Personal", beschreibung: "b" }]),
+    { kategorien: [{ name: "Standort", beschreibung: "a" }, { name: "Personal", beschreibung: "b" }] },
+  );
 });
 
 Deno.test("liste: noch nicht klassifiziertes Geruecht hat Kategorie null", () => {

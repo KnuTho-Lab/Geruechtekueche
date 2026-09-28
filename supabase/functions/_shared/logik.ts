@@ -177,6 +177,10 @@ export const BEGRUENDUNG_MAX = 1000;
 
 // konfidenz, begruendung und manuell_pruefen sind optional und werden vorerst nur
 // mitprotokolliert.
+// Top-2: zweitkategorie ist die zweitbeste Kategorie samt eigener Konfidenz. Die Werte sind
+// unabhaengig (keine Summe 1), einzige Regel: die zweite ist nicht sicherer als die erste.
+// Der Klassifizierer soll sie immer mitschicken, ob sie "uneindeutig" ist, entscheidet erst
+// das Lesen (ZWEITKATEGORIE_AB), damit die Schwelle ohne Datenverlust kalibrierbar bleibt.
 export interface KlassifizierungEingabe {
   geruecht_id: number;
   kategorie: string;
@@ -184,9 +188,28 @@ export interface KlassifizierungEingabe {
   konfidenz: number | null;
   begruendung: string | null;
   manuell_pruefen: boolean;
+  zweitkategorie: string | null;
+  zweitkonfidenz: number | null;
 }
 
-export const KLASSIFIZIERUNG_FELDER = ["geruecht_id", "kategorie", "kernaussage", "konfidenz", "begruendung", "manuell_pruefen"];
+export const KLASSIFIZIERUNG_FELDER = [
+  "geruecht_id", "kategorie", "kernaussage", "konfidenz", "begruendung", "manuell_pruefen",
+  "zweitkategorie", "zweitkonfidenz",
+];
+
+// Ab dieser Zweitkonfidenz gilt ein Geruecht als uneindeutig, GET /geruechte zeigt dann
+// die Zweitkategorie. Platzhalter, gewaehlt am 2026-09-28, noch nicht kalibriert.
+export const ZWEITKATEGORIE_AB = 0.3;
+
+// Zahl zwischen 0 und 1 oder nichts, fuer beide Konfidenzen
+function konfidenzOderNull(wert: unknown, feld: string, probleme: string[]): number | null {
+  if (wert === undefined || wert === null) return null;
+  if (typeof wert !== "number" || !Number.isFinite(wert) || wert < 0 || wert > 1) {
+    probleme.push(`'${feld}' muss eine Zahl zwischen 0 und 1 sein`);
+    return null;
+  }
+  return wert;
+}
 
 export function validiereKlassifizierung(body: unknown): Ergebnis<KlassifizierungEingabe> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -214,14 +237,7 @@ export function validiereKlassifizierung(body: unknown): Ergebnis<Klassifizierun
     probleme.push(`'kernaussage' ist länger als ${KERNAUSSAGE_MAX} Zeichen`);
   }
 
-  let konfidenz: number | null = null;
-  if (b.konfidenz !== undefined && b.konfidenz !== null) {
-    if (typeof b.konfidenz !== "number" || !Number.isFinite(b.konfidenz) || b.konfidenz < 0 || b.konfidenz > 1) {
-      probleme.push("'konfidenz' muss eine Zahl zwischen 0 und 1 sein");
-    } else {
-      konfidenz = b.konfidenz;
-    }
-  }
+  const konfidenz = konfidenzOderNull(b.konfidenz, "konfidenz", probleme);
 
   let begruendung: string | null = null;
   if (b.begruendung !== undefined && b.begruendung !== null) {
@@ -238,8 +254,33 @@ export function validiereKlassifizierung(body: unknown): Ergebnis<Klassifizierun
     else manuellPruefen = b.manuell_pruefen;
   }
 
+  let zweitkategorie: string | null = null;
+  if (b.zweitkategorie !== undefined && b.zweitkategorie !== null) {
+    if (typeof b.zweitkategorie !== "string" || b.zweitkategorie.trim() === "") {
+      probleme.push("'zweitkategorie' muss ein nicht leerer Name sein");
+    } else {
+      zweitkategorie = b.zweitkategorie.trim();
+    }
+  }
+  const zweitkonfidenz = konfidenzOderNull(b.zweitkonfidenz, "zweitkonfidenz", probleme);
+  const zweitGesendet = (b.zweitkategorie ?? null) !== null;
+  const zweitKonfGesendet = (b.zweitkonfidenz ?? null) !== null;
+  if (zweitGesendet !== zweitKonfGesendet) {
+    probleme.push("'zweitkategorie' und 'zweitkonfidenz' nur zusammen schicken");
+  }
+  if (zweitkategorie !== null && zweitkategorie === kategorie) {
+    probleme.push("'zweitkategorie' muss sich von 'kategorie' unterscheiden");
+  }
+  if (zweitkonfidenz !== null) {
+    if (konfidenz === null) probleme.push("'zweitkonfidenz' braucht auch 'konfidenz' zum Vergleich");
+    else if (zweitkonfidenz > konfidenz) probleme.push("'zweitkonfidenz' darf nicht größer als 'konfidenz' sein");
+  }
+
   if (probleme.length > 0 || !id.ok) return { ok: false, fehler: probleme };
-  return ok({ geruecht_id: id.wert, kategorie, kernaussage, konfidenz, begruendung, manuell_pruefen: manuellPruefen });
+  return ok({
+    geruecht_id: id.wert, kategorie, kernaussage, konfidenz, begruendung, manuell_pruefen: manuellPruefen,
+    zweitkategorie, zweitkonfidenz,
+  });
 }
 
 // --- Embedding und Zuordnung -------------------------------------------------
@@ -476,32 +517,47 @@ export function waehleAdminKey(legacy: string | undefined, secretKeysJson: strin
 
 // Die Datenbank liefert je Geruecht nur noch die Anzahl (anzahl: [{count}]) und die
 // frueheste Meldung (erste, auf eine Zeile begrenzt), nicht mehr alle Meldungstexte.
+type KategorieVerweis = { name: string } | { name: string }[] | null;
+
 interface GeruechtZeile {
   geruecht_id: number;
   status: string;
   kernaussage: string | null;
-  kategorien: { name: string } | { name: string }[] | null;
+  kategorien: KategorieVerweis;
   anzahl: { count: number }[] | null;
   erste: { text: string; eingegangen_am: string }[] | null;
+  zweit?: KategorieVerweis;
+  // numeric: kommt als Zahl, zur Sicherheit auch als Text akzeptiert
+  zweitkategorie_konfidenz?: number | string | null;
 }
+
+const nameAus = (v: KategorieVerweis | undefined) => (Array.isArray(v) ? v[0] : v)?.name ?? null;
 
 export function baueGeruechtListe(zeilen: GeruechtZeile[]) {
   return zeilen.map((z) => {
-    const kat = Array.isArray(z.kategorien) ? z.kategorien[0] : z.kategorien;
+    const zweitKonf = z.zweitkategorie_konfidenz == null ? null : Number(z.zweitkategorie_konfidenz);
+    const uneindeutig = zweitKonf !== null && zweitKonf >= ZWEITKATEGORIE_AB;
     // Sortiert die Datenbank schon, hier nur zur Sicherheit, falls doch mehr kommt
     const erste = [...(z.erste ?? [])].sort((a, b) =>
       Date.parse(a.eingegangen_am) - Date.parse(b.eingegangen_am)
     )[0];
     return {
       geruecht_id: z.geruecht_id,
-      kategorie: kat?.name ?? null,
+      kategorie: nameAus(z.kategorien),
       kernaussage: z.kernaussage,
       status: z.status,
       anzahl_meldungen: z.anzahl?.[0]?.count ?? 0,
       beispieltext: erste?.text ?? null,
       erste_meldung_am: erste?.eingegangen_am ?? null,
+      zweitkategorie: uneindeutig ? nameAus(z.zweit) : null,
     };
   });
+}
+
+// Antwort von GET /kategorien, als Funktion, damit der Katalog gegen die echten
+// Feldnamen getestet werden kann
+export function baueKategorienListe(zeilen: { name: string; beschreibung: string }[]) {
+  return { kategorien: zeilen.map((z) => ({ name: z.name, beschreibung: z.beschreibung })) };
 }
 
 // Umschlag einer Seite von GET /geruechte, als Funktion, damit der Katalog gegen die
@@ -774,13 +830,18 @@ export const ENDPUNKTE: Endpunkt[] = [
   ep({
     name: "kategorien",
     methode: "GET",
-    beschreibung: "Alle Kategorien, die der Klassifizierungs-Workflow vergeben kann.",
-    wann_nutzen: "Wenn der Agent erklären will, welche Themen es gibt. Für eine Meldung nicht nötig: " +
-      "die Kategorie vergibt der Klassifizierer.",
+    beschreibung: "Alle Kategorien, die der Klassifizierungs-Workflow vergeben kann, je mit einer " +
+      "Beschreibung, was sie umfasst und wogegen sie sich abgrenzt.",
+    wann_nutzen: "Für den Klassifizierer vor jeder Klassifizierung (Namen plus Abgrenzung in den Prompt). " +
+      "Für den Intake-Agenten nur, wenn er erklären will, welche Themen es gibt: die Kategorie vergibt der Klassifizierer.",
     parameter: [],
     beispiel_aufruf: null,
     erfolg: 200,
-    antwort: { kategorien: "Liste der Kategorienamen" },
+    antwort: {
+      kategorien: "Liste der Kategorien in fester Reihenfolge",
+      "kategorien[].name": "Name, so an POST klassifizierung_setzen schicken",
+      "kategorien[].beschreibung": "was die Kategorie umfasst und wogegen sie sich abgrenzt",
+    },
     fehler: {},
   }),
   ep({
@@ -837,6 +898,8 @@ export const ENDPUNKTE: Endpunkt[] = [
       "geruechte[].anzahl_meldungen": "Meldungen in diesem Gerücht",
       "geruechte[].beispieltext": "Text der ersten Meldung",
       "geruechte[].erste_meldung_am": "Zeitpunkt der ersten Meldung (ISO 8601, UTC)",
+      "geruechte[].zweitkategorie": `zweite Kategorie, nur wenn das Gerücht uneindeutig ist (Zweitkonfidenz ab ` +
+        `${ZWEITKATEGORIE_AB}), sonst null`,
     },
     fehler: { "400": "status fehlt oder ist unbekannt, oder limit/offset ungültig" },
   }),
@@ -921,7 +984,7 @@ export const ENDPUNKTE: Endpunkt[] = [
   ep({
     name: "klassifizierung_setzen",
     methode: "POST",
-    beschreibung: "Setzt Kategorie und Kernaussage eines Gerüchts. Nur einmal möglich.",
+    beschreibung: "Setzt Kategorie, Zweitkategorie (Top-2) und Kernaussage eines Gerüchts. Nur einmal möglich.",
     wann_nutzen: "Nur für den n8n-Klassifizierer nach dem Trigger-Aufruf, nicht für den Intake-Agenten.",
     parameter: [
       {
@@ -984,6 +1047,27 @@ export const ENDPUNKTE: Endpunkt[] = [
         werte: null,
         beispiel: false,
       },
+      {
+        name: "zweitkategorie",
+        ort: "body",
+        pflicht: false,
+        typ: "string",
+        beschreibung: "Zweitbeste Kategorie, Name aus GET kategorien. Immer mitschicken, ob das Gerücht als " +
+          "uneindeutig gilt, entscheidet das Backend an der zweitkonfidenz.",
+        grenzen: "muss in GET kategorien stehen und sich von kategorie unterscheiden, nur zusammen mit zweitkonfidenz",
+        werte: null,
+        beispiel: "Personal",
+      },
+      {
+        name: "zweitkonfidenz",
+        ort: "body",
+        pflicht: false,
+        typ: "number",
+        beschreibung: "Wie gut die Zweitkategorie passt, unabhängig von konfidenz (keine Summe 1)",
+        grenzen: "0 bis 1, höchstens konfidenz, nur zusammen mit zweitkategorie und konfidenz",
+        werte: null,
+        beispiel: 0.4,
+      },
     ],
     beispiel_aufruf: {
       body: {
@@ -993,6 +1077,8 @@ export const ENDPUNKTE: Endpunkt[] = [
         konfidenz: 0.9,
         begruendung: "Nennt einen Standort und dessen Schließung.",
         manuell_pruefen: false,
+        zweitkategorie: "Personal",
+        zweitkonfidenz: 0.4,
       },
     },
     erfolg: 200,
@@ -1003,9 +1089,11 @@ export const ENDPUNKTE: Endpunkt[] = [
       konfidenz: "wie gesendet, sonst null",
       begruendung: "wie gesendet, sonst null",
       manuell_pruefen: "wie gesendet, sonst false",
+      zweitkategorie: "wie gesendet, getrimmt, sonst null",
+      zweitkonfidenz: "wie gesendet, sonst null",
     },
     fehler: {
-      "400": "Body ungültig oder Kategorie unbekannt (dann mit 'gueltige_kategorien')",
+      "400": "Body ungültig oder Kategorie bzw. Zweitkategorie unbekannt (dann mit 'gueltige_kategorien')",
       "404": "Gerücht existiert nicht",
       "409": "Gerücht ist bereits klassifiziert",
     },
