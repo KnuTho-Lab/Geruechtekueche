@@ -180,7 +180,13 @@ class EndpunkteTest(unittest.TestCase):
     def test_kategorien(self):
         status, a = aufruf("GET", "kategorien")
         self.assertEqual(status, 200)
-        self.assertIn("Personal", a["kategorien"])
+        namen = [k["name"] for k in a["kategorien"]]
+        self.assertEqual(namen[:6], ["Standort", "Personal", "Vergütung", "Organisation", "Produkt", "Sicherheit"])
+        for k in a["kategorien"]:
+            self.assertEqual(sorted(k), ["beschreibung", "name"])
+            self.assertTrue(k["beschreibung"].strip(), k["name"])
+        verguetung = next(k for k in a["kategorien"] if k["name"] == "Vergütung")
+        self.assertIn("Kantine", verguetung["beschreibung"])
 
     def test_meldungsschema(self):
         status, a = aufruf("GET", "meldungsschema")
@@ -288,7 +294,7 @@ class EndpunkteTest(unittest.TestCase):
         self.assertEqual(eintrag["anzahl_meldungen"], 2)
         # Der echte n8n-Klassifizierer laeuft mit und ist manchmal schneller als der Test:
         # entweder noch leer oder eine gueltige Kategorie
-        kategorien = aufruf("GET", "kategorien")[1]["kategorien"]
+        kategorien = [k["name"] for k in aufruf("GET", "kategorien")[1]["kategorien"]]
         self.assertIn(eintrag["kategorie"], [None, *kategorien])
         self.assertEqual(eintrag["beispieltext"], "[TEST] Abteilung X wird aufgelöst")
 
@@ -346,20 +352,26 @@ class EndpunkteTest(unittest.TestCase):
         self.assertTrue(antwort["neues_geruecht"], antwort)
         gid = antwort["geruecht_id"]
         body = {"geruecht_id": gid, "kategorie": "Standort", "kernaussage": "[TEST] Im Serverraum kommt ein Aquarium.",
-                "konfidenz": 0.83, "begruendung": "Betrifft den Serverraum am Standort.", "manuell_pruefen": True}
+                "konfidenz": 0.83, "begruendung": "Betrifft den Serverraum am Standort.", "manuell_pruefen": True,
+                "zweitkategorie": "Sicherheit", "zweitkonfidenz": 0.35}
 
         status, a = aufruf("POST", "klassifizierung_setzen", body)
         self.assertEqual(status, 200, a)
         self.assertEqual(a["kategorie"], "Standort")
+        self.assertEqual((a["zweitkategorie"], a["zweitkonfidenz"]), ("Sicherheit", 0.35))
 
         status, a = aufruf("GET", "geruechte", query={"status": "all"})
         eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == gid)
         self.assertEqual(eintrag["kategorie"], "Standort")
         self.assertEqual(eintrag["kernaussage"], "[TEST] Im Serverraum kommt ein Aquarium.")
+        # 0.35 liegt ueber ZWEITKATEGORIE_AB (0.3): uneindeutig, Zweitkategorie sichtbar
+        self.assertEqual(eintrag["zweitkategorie"], "Sicherheit")
 
         # Protokollfelder liegen in der Datenbank (ueber die API nicht sichtbar)
-        zeile = sql(f"select kategorie_konfidenz, kategorie_begruendung, manuell_pruefen "
-                    f"from geruechte where geruecht_id = {int(gid)};")[0]
+        zeile = sql(f"select kategorie_konfidenz, kategorie_begruendung, manuell_pruefen, "
+                    f"(select name from kategorien where kategorie_id = zweitkategorie_id) as zweit, "
+                    f"zweitkategorie_konfidenz from geruechte where geruecht_id = {int(gid)};")[0]
+        self.assertEqual((zeile["zweit"], float(zeile["zweitkategorie_konfidenz"])), ("Sicherheit", 0.35))
         self.assertEqual(float(zeile["kategorie_konfidenz"]), 0.83)
         self.assertEqual(zeile["kategorie_begruendung"], "Betrifft den Serverraum am Standort.")
         self.assertIs(zeile["manuell_pruefen"], True)
@@ -385,6 +397,16 @@ class EndpunkteTest(unittest.TestCase):
         self.assertIn("sicherheit", a["fehler"][0])
         status, _ = aufruf("POST", "klassifizierung_setzen",
                            {"geruecht_id": 1, "kategorie": "Standort", "kernaussage": "x", "konfidenz": 1.5})
+        self.assertEqual(status, 400)
+        # Zweitkategorie: unbekannt (mit Liste), gleich der Hauptkategorie, sicherer als die erste
+        basis = {"geruecht_id": 999999999, "kategorie": "Standort", "kernaussage": "x", "konfidenz": 0.6}
+        status, a = aufruf("POST", "klassifizierung_setzen", {**basis, "zweitkategorie": "Gibtsnicht", "zweitkonfidenz": 0.3})
+        self.assertEqual(status, 400)
+        self.assertIn("Gibtsnicht", a["fehler"][0])
+        self.assertIn("Personal", a["gueltige_kategorien"])
+        status, _ = aufruf("POST", "klassifizierung_setzen", {**basis, "zweitkategorie": "Standort", "zweitkonfidenz": 0.3})
+        self.assertEqual(status, 400)
+        status, _ = aufruf("POST", "klassifizierung_setzen", {**basis, "zweitkategorie": "Personal", "zweitkonfidenz": 0.7})
         self.assertEqual(status, 400)
 
 if __name__ == "__main__":
