@@ -1,6 +1,6 @@
--- Test fuer das Logging (Migrationen 20260927120000 bis 20260927140100): Zeitstempel am
--- Geruecht, Anstoss-Protokoll, Abholen der pg_net-Antworten, View haengende_klassifizierungen,
--- Zusatzfelder der Meldung und Abweisungen.
+-- Test fuer das Logging (Migrationen 20260927120000 bis 20260928070000): Zeitstempel am
+-- Geruecht, Anstoss-Protokoll samt ausloesender Meldung, Abholen der pg_net-Antworten,
+-- View haengende_klassifizierungen, Zusatzfelder der Meldung und Abweisungen.
 -- Laeuft in einer Transaktion mit ROLLBACK: es bleibt nichts zurueck, und pg_net verschickt
 -- nichts, weil es erst nach einem Commit sendet.
 -- Ausfuehren: npx supabase db query --linked --file supabase/tests/logging_test.sql
@@ -14,6 +14,8 @@ declare
   g_neu      bigint;
   g_ohne     bigint;
   g_fertig   bigint;
+  m_erste    bigint;
+  m_ohne     bigint;
   zeit       timestamptz;
   anstoss    record;
   anzahl     int;
@@ -43,7 +45,8 @@ begin
   perform vault.create_secret('test-geheimnis', 'klassifizierer_webhook_secret');
 
   insert into public.geruechte default values returning geruecht_id into g_neu;
-  insert into public.meldungen (geruecht_id, text) values (g_neu, '[TEST] Logging erste Meldung');
+  insert into public.meldungen (geruecht_id, text) values (g_neu, '[TEST] Logging erste Meldung')
+    returning meldung_id into m_erste;
   insert into public.meldungen (geruecht_id, text) values (g_neu, '[TEST] Logging zweite Meldung');
 
   select count(*) into anzahl from public.klassifizierung_anstoesse where geruecht_id = g_neu;
@@ -52,6 +55,8 @@ begin
   assert anstoss.request_id = (select id from net.http_request_queue where url = test_url),
     'Fall 3: request_id passt nicht zur Anfrage in pg_net';
   assert anstoss.fehler is null and anstoss.antwort_abgeholt_am is null, 'Fall 3: Anstoss ist schon abgeschlossen';
+  assert anstoss.meldung_id = m_erste,
+    format('Fall 3: meldung_id ist %s, erwartet die ausloesende Meldung %s', anstoss.meldung_id, m_erste);
 
   -- Fall 4: Antwort von n8n (hier nachgestellt: 403) wird ins Protokoll uebernommen, genau
   -- einmal, aber ohne den Inhalt der Antwort: der koennte Meldungstext spiegeln
@@ -67,10 +72,12 @@ begin
   -- Fall 5: Webhook nicht konfiguriert -> Meldung gespeichert, Anstoss mit Grund, ohne request_id
   delete from vault.secrets where name in ('klassifizierer_webhook_url', 'klassifizierer_webhook_secret');
   insert into public.geruechte default values returning geruecht_id into g_ohne;
-  insert into public.meldungen (geruecht_id, text) values (g_ohne, '[TEST] Logging ohne Konfiguration');
+  insert into public.meldungen (geruecht_id, text) values (g_ohne, '[TEST] Logging ohne Konfiguration')
+    returning meldung_id into m_ohne;
   select * into anstoss from public.klassifizierung_anstoesse where geruecht_id = g_ohne;
   assert anstoss.request_id is null, 'Fall 5: request_id gesetzt, obwohl nichts verschickt wurde';
   assert anstoss.fehler like 'Webhook nicht konfiguriert%', format('Fall 5: fehler ist %s', anstoss.fehler);
+  assert anstoss.meldung_id = m_ohne, 'Fall 5: auch ohne Versand fehlt die ausloesende Meldung';
 
   -- Fall 6: die View zeigt nur unklassifizierte Geruechte, die aelter als 10 Minuten sind
   select count(*) into anzahl from public.haengende_klassifizierungen where geruecht_id in (g_neu, g_ohne);
