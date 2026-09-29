@@ -80,7 +80,7 @@ function blaseBauen({ rolle, text }) {
 
 function verlaufZeichnen() {
   el.verlauf.replaceChildren();
-  if (!verlauf.length) el.verlauf.append(blaseBauen({ rolle: 'agent', text: BEGRUESSUNG }));
+  el.verlauf.append(blaseBauen({ rolle: 'agent', text: BEGRUESSUNG }));
   for (const eintrag of verlauf) el.verlauf.append(blaseBauen(eintrag));
   nachUnten();
 }
