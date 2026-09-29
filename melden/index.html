@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gerüchteküche</title>
+<meta name="description" content="Erzähl dem Agenten der Gerüchteküche anonym, was du gehört hast.">
+<meta name="referrer" content="no-referrer">
+<!-- Kein API-Key im Browser: nur der öffentliche Supabase-Schlüssel (publishable) steht in app.js.
+     Der Weg zum Agenten läuft über eine Edge Function, die das Login prüft. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; connect-src https://apdwjhufucblzxaoztsv.supabase.co wss://apdwjhufucblzxaoztsv.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --sky-top: #efe9dd;
+    --sky-bottom: #f7f2e9;
+    --sun: #f2c9a4;
+    --cloud: #fbf8f2;
+    --hill-far: #dfe5d6;
+    --hill-mid: #cdd9c3;
+    --hill-near: #b9c9ae;
+    --tree: #9fb593;
+    --tree-dark: #8aa37e;
+    --house: #f4ece0;
+    --roof: #cf9a80;
+    --window: #f3cf8e;
+    --steam: #ffffff;
+
+    --surface: rgba(255, 253, 249, .86);
+    --surface-solid: #fffdf9;
+    --border: rgba(92, 84, 72, .14);
+    --text: #2b2823;
+    --muted: #6f695f;
+    --faint: #a8a194;
+    --accent: #c8693a;
+    --accent-hover: #b45a2e;
+    --accent-soft: #f8e5d9;
+    --user: #e4ece0;
+    --user-text: #25301f;
+    --agent: #ffffff;
+    --hint: #f5efe3;
+    --focus: rgba(200, 105, 58, .35);
+    --shadow: 0 1px 2px rgba(43, 40, 35, .04), 0 12px 40px rgba(43, 40, 35, .08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --sky-top: #141a24;
+      --sky-bottom: #1d2533;
+      --sun: #e9e2cf;
+      --cloud: #283142;
+      --hill-far: #1f2a2e;
+      --hill-mid: #1b2527;
+      --hill-near: #172022;
+      --tree: #22312f;
+      --tree-dark: #1c2927;
+      --house: #2a2f37;
+      --roof: #5a3f37;
+      --window: #f0b464;
+      --steam: #8d97a6;
+
+      --surface: rgba(28, 32, 40, .86);
+      --surface-solid: #1c2028;
+      --border: rgba(220, 225, 235, .1);
+      --text: #ece8e1;
+      --muted: #a39e95;
+      --faint: #6b6760;
+      --accent: #e98a57;
+      --accent-hover: #f09a6b;
+      --accent-soft: #3a2a22;
+      --user: #2c3a31;
+      --user-text: #e3eddd;
+      --agent: #232833;
+      --hint: #2a2a26;
+      --focus: rgba(233, 138, 87, .4);
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 12px 40px rgba(0, 0, 0, .35);
+    }
+  }
+  :root[data-theme="dark"] { color-scheme: dark; }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--sky-bottom);
+    color: var(--text);
+    font: 15px/1.55 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  [hidden] { display: none !important; }
+
+  /* Illustrierte Landschaft im Hintergrund */
+  .szene { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+  .szene svg { width: 100%; height: 100%; display: block; }
+  .wolken { animation: treiben 140s linear infinite alternate; }
+  @keyframes treiben { from { transform: translateX(-40px); } to { transform: translateX(60px); } }
+  .dampf path { stroke: var(--steam); animation: steigen 4.5s ease-in-out infinite; opacity: 0; }
+  .dampf path:nth-child(2) { animation-delay: 1.5s; }
+  .dampf path:nth-child(3) { animation-delay: 3s; }
+  @keyframes steigen {
+    0% { opacity: 0; transform: translateY(6px); }
+    40% { opacity: .75; }
+    100% { opacity: 0; transform: translateY(-18px); }
+  }
+
+  /* Rahmen */
+  .app { position: relative; z-index: 1; min-height: 100dvh; display: flex; flex-direction: column; }
+  .kopf {
+    width: 100%; max-width: 760px; margin: 0 auto; padding: 20px 16px 8px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .marke { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -.01em; }
+  .marke span { font-family: Fraunces, Georgia, serif; font-size: 20px; }
+  .abmelden {
+    margin-left: auto; font: inherit; font-size: 13px; color: var(--muted); background: none;
+    border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; cursor: pointer;
+  }
+  .abmelden:hover { color: var(--text); background: var(--surface); }
+
+  main { flex: 1; display: flex; justify-content: center; align-items: flex-start; padding: 8px 16px; }
+  .karte {
+    width: 100%; max-width: 728px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 22px; box-shadow: var(--shadow);
+    -webkit-backdrop-filter: blur(14px) saturate(1.1); backdrop-filter: blur(14px) saturate(1.1);
+  }
+
+  /* Anmeldung */
+  .anmeldung { max-width: 420px; margin-top: 6vh; padding: 32px 28px 26px; text-align: center; }
+  .anmeldung .topf { width: 84px; height: 84px; margin: 0 auto 6px; display: block; }
+  .anmeldung h1 { font-family: Fraunces, Georgia, serif; font-weight: 600; font-size: 26px; line-height: 1.2; margin: 0 0 6px; }
+  .anmeldung p.unter { margin: 0 0 22px; color: var(--muted); }
+  .feld { text-align: left; margin-bottom: 14px; }
+  .feld label { display: block; font-size: 13px; font-weight: 500; color: var(--muted); margin-bottom: 5px; }
+  .feld input {
+    width: 100%; font: inherit; color: var(--text); background: var(--surface-solid);
+    border: 1px solid var(--border); border-radius: 12px; padding: 11px 13px; outline: none;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .feld input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--focus); }
+  .knopf {
+    width: 100%; font: inherit; font-weight: 600; color: #fff; background: var(--accent);
+    border: 0; border-radius: 12px; padding: 12px; cursor: pointer; transition: background .2s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .knopf:hover { background: var(--accent-hover); }
+  .knopf:disabled { opacity: .6; cursor: default; }
+  .knopf:focus-visible, .senden:focus-visible, .abmelden:focus-visible, .neu:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--focus); }
+  .meldung-fehler { min-height: 20px; margin: 10px 0 0; font-size: 13px; color: #b0412a; }
+  :root:not([data-theme="light"]) .meldung-fehler { color: #e7876a; }
+  .kleingedruckt { margin: 14px 0 0; font-size: 12.5px; color: var(--faint); }
+
+  /* Chat */
+  .chat { display: flex; flex-direction: column; height: min(760px, calc(100dvh - 190px)); min-height: 420px; }
+  .chat-kopf { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+  .chat-kopf .avatar { flex: none; }
+  .chat-kopf h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  .chat-kopf .status { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .punkt { width: 7px; height: 7px; border-radius: 50%; background: #7fa877; }
+  .punkt.aus { background: var(--faint); }
+  .neu {
+    margin-left: auto; font: inherit; font-size: 13px; color: var(--muted); background: none;
+    border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; cursor: pointer;
+  }
+  .neu:hover { color: var(--text); background: var(--surface-solid); }
+
+  .verlauf {
+    flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 22px 20px 10px;
+    display: flex; flex-direction: column; gap: 14px; scroll-behavior: smooth;
+    scrollbar-width: thin; scrollbar-color: var(--faint) transparent;
+  }
+  .nachricht { display: flex; gap: 10px; align-items: flex-end; max-width: 86%; animation: auftauchen .35s ease-out; }
+  @keyframes auftauchen { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .nachricht .blase {
+    padding: 10px 14px; border-radius: 18px; white-space: pre-wrap; overflow-wrap: anywhere;
+    border: 1px solid var(--border);
+  }
+  .nachricht.agent .blase { background: var(--agent); border-bottom-left-radius: 6px; }
+  .nachricht.nutzer { align-self: flex-end; }
+  .nachricht.nutzer .blase { background: var(--user); color: var(--user-text); border-color: transparent; border-bottom-right-radius: 6px; }
+  .nachricht.hinweis { align-self: center; max-width: 92%; }
+  .nachricht.hinweis .blase { background: var(--hint); color: var(--muted); font-size: 13.5px; text-align: center; border-radius: 12px; border-style: dashed; }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--accent-soft); display: grid; place-items: center; flex: none; }
+
+  .tippt .blase { display: flex; gap: 5px; align-items: center; padding: 14px 16px; }
+  .tippt i { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); animation: huepfen 1.3s infinite ease-in-out; }
+  .tippt i:nth-child(2) { animation-delay: .15s; }
+  .tippt i:nth-child(3) { animation-delay: .3s; }
+  @keyframes huepfen { 0%, 60%, 100% { transform: none; opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+  .eingabe { padding: 12px 14px 14px; border-top: 1px solid var(--border); }
+  .eingabe-zeile {
+    display: flex; gap: 8px; align-items: flex-end; background: var(--surface-solid);
+    border: 1px solid var(--border); border-radius: 18px; padding: 6px 6px 6px 14px;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .eingabe-zeile:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px var(--focus); }
+  .eingabe textarea {
+    flex: 1; font: inherit; color: var(--text); background: transparent; border: 0; outline: none;
+    resize: none; padding: 8px 0; max-height: 160px; min-height: 24px; line-height: 1.5;
+  }
+  .eingabe textarea::placeholder { color: var(--faint); }
+  .senden {
+    flex: none; width: 40px; height: 40px; border-radius: 50%; border: 0; cursor: pointer;
+    background: var(--accent); color: #fff; display: grid; place-items: center; transition: background .2s, opacity .2s;
+  }
+  .senden:hover { background: var(--accent-hover); }
+  .senden:disabled { opacity: .45; cursor: default; }
+  .eingabe .zaehler { font-size: 12px; color: var(--faint); text-align: right; margin: 6px 6px 0; min-height: 18px; }
+  .eingabe .zaehler.warn { color: var(--accent); }
+
+  /* Disclaimer */
+  .fuss { width: 100%; max-width: 760px; margin: 0 auto; padding: 14px 16px 22px; }
+  .hinweis-ki {
+    display: flex; gap: 12px; align-items: flex-start; font-size: 13px; color: var(--muted);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px;
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  }
+  .hinweis-ki svg { flex: none; margin-top: 1px; }
+  .hinweis-ki p { margin: 0; }
+  .hinweis-ki strong { color: var(--text); font-weight: 600; }
+
+  .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.5); border-top-color: #fff; border-radius: 50%; animation: drehen .8s linear infinite; }
+  @keyframes drehen { to { transform: rotate(360deg); } }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  @media (max-width: 560px) {
+    .kopf { padding-top: 14px; }
+    .anmeldung { margin-top: 2vh; padding: 26px 20px 20px; }
+    /* Disclaimer soll auch mobil ohne Scrollen sichtbar bleiben */
+    .chat { height: calc(100dvh - 300px); min-height: 340px; }
+    .nachricht { max-width: 94%; }
+    .chat-kopf { padding: 12px 14px; gap: 10px; }
+    .chat-kopf h2 { white-space: nowrap; }
+    .neu { white-space: nowrap; padding: 5px 10px; }
+    .fuss { padding: 10px 16px 14px; }
+    .hinweis-ki { font-size: 12px; padding: 10px 12px; gap: 10px; }
+    .verlauf { padding: 18px 14px 8px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .wolken, .dampf path, .nachricht, .tippt i { animation: none !important; }
+    .dampf path { opacity: .5; }
+    .verlauf { scroll-behavior: auto; }
+  }
+</style>
+<script type="module" src="app.js"></script>
+</head>
+<body>
+
+<!-- Hintergrund: ruhige Hügellandschaft mit der kleinen Küche, aus der Dampf steigt -->
+<div class="szene" aria-hidden="true">
+  <svg viewBox="0 0 1440 900" preserveAspectRatio="xMidYMax slice">
+    <defs>
+      <linearGradient id="himmel" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="var(--sky-top)"/>
+        <stop offset="1" stop-color="var(--sky-bottom)"/>
+      </linearGradient>
+      <radialGradient id="schein" cx=".5" cy=".5" r=".5">
+        <stop offset="0" stop-color="var(--sun)" stop-opacity=".55"/>
+        <stop offset="1" stop-color="var(--sun)" stop-opacity="0"/>
+      </radialGradient>
+      <radialGradient id="licht" cx=".5" cy=".5" r=".5">
+        <stop offset="0" stop-color="var(--window)" stop-opacity=".55"/>
+        <stop offset="1" stop-color="var(--window)" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect width="1440" height="900" fill="url(#himmel)"/>
+    <circle cx="1150" cy="220" r="190" fill="url(#schein)"/>
+    <circle cx="1150" cy="220" r="62" fill="var(--sun)" opacity=".85"/>
+
+    <g class="wolken" fill="var(--cloud)" opacity=".9">
+      <path d="M180 190c0-22 18-40 40-40 10 0 20 4 27 11 8-17 25-29 45-29 28 0 50 22 50 50v8H180z"/>
+      <path d="M860 120c0-16 13-29 29-29 8 0 15 3 20 8 6-12 18-21 33-21 20 0 36 16 36 36v6H860z" opacity=".8"/>
+      <path d="M1260 360c0-14 11-25 25-25 6 0 12 2 16 6 5-10 15-17 27-17 17 0 31 14 31 31v5h-99z" opacity=".7"/>
+    </g>
+
+    <!-- ferne Hügel -->
+    <path d="M0 560C160 500 300 520 460 548s300 20 470-24 330-60 510 4V900H0z" fill="var(--hill-far)"/>
+    <!-- mittlere Hügel mit Häuschen -->
+    <path d="M0 650c120-50 260-78 400-60s250 70 420 58 330-80 620-30V900H0z" fill="var(--hill-mid)"/>
+
+    <g transform="translate(236 520)">
+      <ellipse cx="45" cy="80" rx="120" ry="60" fill="url(#licht)"/>
+      <rect x="62" y="6" width="14" height="30" rx="2" fill="var(--roof)"/>
+      <g class="dampf" fill="none" stroke-width="5" stroke-linecap="round">
+        <path d="M66 0c-7-9 7-14 0-25"/>
+        <path d="M74 -4c-7-9 7-14 0-25"/>
+        <path d="M70 -8c-7-9 7-14 0-25"/>
+      </g>
+      <rect x="0" y="44" width="92" height="62" rx="4" fill="var(--house)"/>
+      <path d="M-10 48 46 8l56 40z" fill="var(--roof)" stroke="var(--roof)" stroke-width="6" stroke-linejoin="round"/>
+      <rect x="14" y="62" width="24" height="22" rx="3" fill="var(--window)"/>
+      <rect x="56" y="66" width="20" height="40" rx="3" fill="var(--roof)" opacity=".75"/>
+    </g>
+
+    <g fill="var(--tree)">
+      <circle cx="120" cy="598" r="26"/><rect x="117" y="618" width="6" height="24" rx="2" fill="var(--tree-dark)"/>
+      <circle cx="162" cy="612" r="18" fill="var(--tree-dark)"/><rect x="160" y="626" width="4" height="16" rx="2" fill="var(--tree-dark)"/>
+      <circle cx="1030" cy="600" r="22"/><rect x="1027" y="618" width="6" height="22" rx="2" fill="var(--tree-dark)"/>
+      <circle cx="1068" cy="592" r="30" fill="var(--tree-dark)"/><rect x="1065" y="616" width="6" height="26" rx="2" fill="var(--tree-dark)"/>
+    </g>
+
+    <!-- nahe Hügel -->
+    <path d="M0 770c200-60 420-70 640-40s420 50 800-20V900H0z" fill="var(--hill-near)"/>
+  </svg>
+</div>
+
+<div class="app">
+  <header class="kopf">
+    <div class="marke">
+      <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="5" y="13" width="22" height="13" rx="4" fill="var(--accent)"/>
+        <rect x="2" y="14" width="4" height="3" rx="1.5" fill="var(--accent)"/>
+        <rect x="26" y="14" width="4" height="3" rx="1.5" fill="var(--accent)"/>
+        <rect x="4" y="10" width="24" height="3" rx="1.5" fill="var(--text)"/>
+        <path d="M11 7c0-2 2-2 2-4M16 7c0-2 2-2 2-4M21 7c0-2 2-2 2-4" stroke="var(--faint)" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      </svg>
+      <span>Gerüchteküche</span>
+    </div>
+    <button class="abmelden" id="abmelden" type="button" hidden>Abmelden</button>
+  </header>
+
+  <main>
+    <!-- Anmeldung -->
+    <section class="karte anmeldung" id="anmeldung" hidden aria-labelledby="titel-anmeldung">
+      <svg class="topf" viewBox="0 0 150 150" aria-hidden="true">
+        <g class="dampf" fill="none" stroke-width="5" stroke-linecap="round" style="--steam: var(--faint)">
+          <path d="M55 52c-6-8 6-12 0-22"/>
+          <path d="M75 48c-6-8 6-12 0-22"/>
+          <path d="M95 52c-6-8 6-12 0-22"/>
+        </g>
+        <rect x="22" y="62" width="106" height="8" rx="4" fill="var(--text)"/>
+        <path d="M28 70h94v34a26 26 0 0 1-26 26H54a26 26 0 0 1-26-26z" fill="var(--accent)"/>
+        <rect x="10" y="78" width="20" height="8" rx="4" fill="var(--accent)"/>
+        <rect x="120" y="78" width="20" height="8" rx="4" fill="var(--accent)"/>
+        <circle cx="60" cy="96" r="4" fill="var(--accent-soft)"/>
+        <circle cx="78" cy="104" r="3" fill="var(--accent-soft)"/>
+        <circle cx="92" cy="92" r="2.5" fill="var(--accent-soft)"/>
+      </svg>
+      <h1 id="titel-anmeldung">Schön, dass du da bist.</h1>
+      <p class="unter">Melde dich an, um dem Agenten zu erzählen, was du gehört hast.</p>
+      <form id="anmeldeformular" novalidate>
+        <div class="feld">
+          <label for="nutzername">Nutzername</label>
+          <input id="nutzername" name="nutzername" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="40" required>
+        </div>
+        <div class="feld">
+          <label for="passwort">Passwort</label>
+          <input id="passwort" name="passwort" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="knopf" id="anmelden" type="submit">Anmelden</button>
+        <p class="meldung-fehler" id="anmeldefehler" role="alert"></p>
+      </form>
+      <p class="kleingedruckt">Zugänge vergibt das Team. Eine Selbst-Registrierung gibt es nicht.</p>
+    </section>
+
+    <!-- Chat -->
+    <section class="karte chat" id="chat" hidden aria-labelledby="titel-chat">
+      <div class="chat-kopf">
+        <div class="avatar" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 32 32"><rect x="5" y="13" width="22" height="13" rx="4" fill="var(--accent)"/><rect x="4" y="10" width="24" height="3" rx="1.5" fill="var(--text)"/><path d="M11 7c0-2 2-2 2-4M16 7c0-2 2-2 2-4M21 7c0-2 2-2 2-4" stroke="var(--faint)" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+        </div>
+        <div>
+          <h2 id="titel-chat">Gerüchteküche-Agent</h2>
+          <div class="status"><span class="punkt" id="statuspunkt"></span><span id="statustext">bereit</span></div>
+        </div>
+        <button class="neu" id="neu" type="button" title="Verlauf leeren und neu beginnen">Neu starten</button>
+      </div>
+      <div class="verlauf" id="verlauf" role="log" aria-live="polite" aria-label="Gesprächsverlauf"></div>
+      <form class="eingabe" id="eingabeformular" novalidate>
+        <label class="sr" for="text">Deine Nachricht</label>
+        <div class="eingabe-zeile">
+          <textarea id="text" rows="1" placeholder="Was hast du gehört?" maxlength="2000"></textarea>
+          <button class="senden" id="senden" type="submit" aria-label="Senden" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+        <div class="zaehler" id="zaehler" aria-live="polite"></div>
+      </form>
+    </section>
+  </main>
+
+  <footer class="fuss">
+    <div class="hinweis-ki">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+      <p><strong>Du sprichst mit einem KI-Agenten, nicht mit einem Menschen.</strong>
+        Deine Meldung wird anonym verarbeitet: Sie wird nicht mit deinem Konto verknüpft, und Namen werden entfernt.
+        Wir gehen verantwortungsvoll damit um und kümmern uns um dein Anliegen.
+        In einer akuten Notlage wähle bitte 112.</p>
+    </div>
+  </footer>
+</div>
+
+</body>
+</html>
