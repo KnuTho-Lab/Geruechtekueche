@@ -4,7 +4,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import {
   eingabePruefen, anfrageBauen, antwortText, fehlerText, anmeldeFehlerText,
-  sitzungLaden, sitzungNeu, verlaufLaden, verlaufSpeichern, MAX_ZEICHEN,
+  sitzungLaden, sitzungNeu, verlaufLaden, verlaufSpeichern, nutzernameZuEmail, MAX_ZEICHEN,
 } from './logik.js';
 
 const KONFIG = {
@@ -13,8 +13,8 @@ const KONFIG = {
   // anon/authenticated haben seit 2026-09-26 keine Tabellenrechte.
   supabaseKey: 'sb_publishable_weKrqRKNYmPJmUDdkT8FWg_VCA7wJ1m',
   agentFunktion: 'agent-chat',
-  // Erst auf true setzen, wenn die Edge Function agent-chat deployed ist.
-  agentVerbunden: false,
+  // Auf false setzen, um die Seite ohne Agent zu zeigen (Nachrichten gehen dann nirgendwohin).
+  agentVerbunden: true,
   zeitlimitMs: 60000,
 };
 
@@ -28,7 +28,7 @@ const neueId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-$
 const $ = (id) => document.getElementById(id);
 const el = {
   anmeldung: $('anmeldung'), chat: $('chat'), abmelden: $('abmelden'),
-  anmeldeformular: $('anmeldeformular'), email: $('email'), passwort: $('passwort'),
+  anmeldeformular: $('anmeldeformular'), nutzername: $('nutzername'), passwort: $('passwort'),
   anmelden: $('anmelden'), anmeldefehler: $('anmeldefehler'),
   verlauf: $('verlauf'), eingabeformular: $('eingabeformular'), text: $('text'),
   senden: $('senden'), zaehler: $('zaehler'), neu: $('neu'),
@@ -45,7 +45,7 @@ function zeigeAnmeldung() {
   el.chat.hidden = true;
   el.abmelden.hidden = true;
   el.anmeldung.hidden = false;
-  el.email.focus();
+  el.nutzername.focus();
 }
 
 function zeigeChat() {
@@ -198,10 +198,14 @@ el.neu.addEventListener('click', () => {
 el.anmeldeformular.addEventListener('submit', async (e) => {
   e.preventDefault();
   el.anmeldefehler.textContent = '';
-  const email = el.email.value.trim();
   const password = el.passwort.value;
-  if (!email || !password) {
-    el.anmeldefehler.textContent = 'Bitte E-Mail und Passwort eingeben.';
+  if (!el.nutzername.value.trim() || !password) {
+    el.anmeldefehler.textContent = 'Bitte Nutzername und Passwort eingeben.';
+    return;
+  }
+  const email = nutzernameZuEmail(el.nutzername.value);
+  if (!email) {
+    el.anmeldefehler.textContent = 'Der Nutzername darf nur Buchstaben, Ziffern, Punkt, Binde- und Unterstrich enthalten.';
     return;
   }
   el.anmelden.disabled = true;

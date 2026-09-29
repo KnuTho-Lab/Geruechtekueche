@@ -3,10 +3,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  MAX_ZEICHEN, MAX_VERLAUF,
+  MAX_ZEICHEN, MAX_VERLAUF, NUTZER_DOMAIN,
   eingabePruefen, anfrageBauen, antwortText, fehlerText, anmeldeFehlerText,
-  sitzungLaden, sitzungNeu, verlaufLaden, verlaufSpeichern,
+  sitzungLaden, sitzungNeu, verlaufLaden, verlaufSpeichern, nutzernameZuEmail,
 } from '../../melden/logik.js';
+
+test('nutzernameZuEmail: Name wird klein geschrieben und bekommt die feste Domain', () => {
+  assert.equal(nutzernameZuEmail('Knut'), `knut@${NUTZER_DOMAIN}`);
+  assert.equal(nutzernameZuEmail('  THOMAS '), `thomas@${NUTZER_DOMAIN}`);
+  assert.equal(nutzernameZuEmail('max.muster-1_a'), `max.muster-1_a@${NUTZER_DOMAIN}`);
+});
+
+test('nutzernameZuEmail: leer, zu lang oder mit Sonderzeichen ergibt null', () => {
+  assert.equal(nutzernameZuEmail(''), null);
+  assert.equal(nutzernameZuEmail('   '), null);
+  assert.equal(nutzernameZuEmail(undefined), null);
+  assert.equal(nutzernameZuEmail('knut@evil.example'), null);
+  assert.equal(nutzernameZuEmail('kn ut'), null);
+  assert.equal(nutzernameZuEmail('a'.repeat(41)), null);
+  assert.equal(nutzernameZuEmail('a'.repeat(40)), `${'a'.repeat(40)}@${NUTZER_DOMAIN}`);
+});
 
 // Minimaler Ersatz für sessionStorage.
 function speicher(start = {}) {
@@ -72,8 +88,8 @@ test('fehlerText: bekannte Statuscodes haben eigene Texte', () => {
 });
 
 test('anmeldeFehlerText: falsche Zugangsdaten verraten nicht, was falsch war', () => {
-  assert.equal(anmeldeFehlerText({ message: 'Invalid login credentials' }), 'E-Mail oder Passwort stimmen nicht.');
-  assert.match(anmeldeFehlerText({ message: 'Email not confirmed' }), /bestätigt/i);
+  assert.equal(anmeldeFehlerText({ message: 'Invalid login credentials' }), 'Nutzername oder Passwort stimmen nicht.');
+  assert.match(anmeldeFehlerText({ message: 'Email not confirmed' }), /freigeschaltet/i);
   assert.match(anmeldeFehlerText({ status: 429, message: 'x' }), /versuche/i);
   assert.match(anmeldeFehlerText({ message: 'Failed to fetch' }), /verbindung/i);
   assert.match(anmeldeFehlerText({}), /nicht geklappt/i);

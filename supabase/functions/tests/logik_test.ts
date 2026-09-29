@@ -488,10 +488,16 @@ Deno.test("admin-key: nichts gesetzt -> null", () => {
 
 // --- ENDPUNKTE (Katalog fuer GET /calls) -------------------------------------
 
+// Functions fuer die Browser-Seiten, nicht fuer den Agenten: Login per Supabase Auth statt
+// x-api-key, deshalb nicht in /calls. Jede Ausnahme hier bewusst eintragen.
+const NICHT_IM_KATALOG = ["agent-chat"];
+
 Deno.test("calls: jede Function-Ordner steht genau einmal im Katalog", async () => {
   const ordner: string[] = [];
   for await (const e of Deno.readDir(new URL("..", import.meta.url))) {
-    if (e.isDirectory && !e.name.startsWith("_") && e.name !== "tests") ordner.push(e.name);
+    if (e.isDirectory && !e.name.startsWith("_") && e.name !== "tests" && !NICHT_IM_KATALOG.includes(e.name)) {
+      ordner.push(e.name);
+    }
   }
   const imKatalog = ENDPUNKTE.map((e) => e.name);
   assertEquals([...imKatalog].sort(), ordner.sort());

@@ -2,9 +2,19 @@
 
 export const MAX_ZEICHEN = 2000;
 export const MAX_VERLAUF = 100;
+// Supabase Auth kennt nur E-Mail oder Telefon. Die Seite fragt einen Nutzernamen ab und
+// meldet sich mit <name>@NUTZER_DOMAIN an. Die Domain gehoert der GitHub-Organisation
+// und nimmt keine Mails an; die Konten werden im Dashboard mit Auto Confirm angelegt.
+export const NUTZER_DOMAIN = 'knutho-lab.github.io';
+const NUTZERNAME_MUSTER = /^[a-z0-9._-]{1,40}$/;
 const SCHLUESSEL_SITZUNG = 'gk-sitzung';
 const SCHLUESSEL_VERLAUF = 'gk-verlauf';
 const ROLLEN = new Set(['nutzer', 'agent', 'hinweis']);
+
+export function nutzernameZuEmail(roh) {
+  const name = typeof roh === 'string' ? roh.trim().toLowerCase() : '';
+  return NUTZERNAME_MUSTER.test(name) ? `${name}@${NUTZER_DOMAIN}` : null;
+}
 
 export function eingabePruefen(roh) {
   const text = typeof roh === 'string' ? roh.trim() : '';
@@ -42,8 +52,8 @@ export function fehlerText(status) {
 
 export function anmeldeFehlerText(fehler) {
   const text = String(fehler?.message ?? '');
-  if (/invalid login credentials/i.test(text)) return 'E-Mail oder Passwort stimmen nicht.';
-  if (/email not confirmed/i.test(text)) return 'Diese E-Mail-Adresse ist noch nicht bestätigt.';
+  if (/invalid login credentials/i.test(text)) return 'Nutzername oder Passwort stimmen nicht.';
+  if (/email not confirmed/i.test(text)) return 'Dieses Konto ist noch nicht freigeschaltet.';
   if (fehler?.status === 429 || /rate limit/i.test(text)) return 'Zu viele Versuche. Bitte versuche es in ein paar Minuten erneut.';
   if (/failed to fetch|network/i.test(text)) return 'Keine Verbindung. Prüf dein Netz und versuch es noch einmal.';
   return 'Die Anmeldung hat nicht geklappt. Versuch es noch einmal.';
