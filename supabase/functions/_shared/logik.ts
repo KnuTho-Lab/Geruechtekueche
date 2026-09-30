@@ -870,12 +870,14 @@ export const ENDPUNKTE: Endpunkt[] = [
     beschreibung: "Alle Kategorien, die der Klassifizierungs-Workflow vergeben kann, je mit einer " +
       "Beschreibung, was sie umfasst und wogegen sie sich abgrenzt.",
     wann_nutzen: "Für den Klassifizierer vor jeder Klassifizierung (Namen plus Abgrenzung in den Prompt). " +
-      "Für den Intake-Agenten nur, wenn er erklären will, welche Themen es gibt: die Kategorie vergibt der Klassifizierer.",
+      "Für den Intake-Agenten nur, wenn er erklären will, welche Themen es gibt: die Kategorie vergibt der Klassifizierer. " +
+      `'${SONSTIGES}' ist das Auffangbecken, die harte Bedingung dafür steht bei POST klassifizierung_setzen.`,
     parameter: [],
     beispiel_aufruf: null,
     erfolg: 200,
     antwort: {
-      kategorien: "Liste der Kategorien in fester Reihenfolge",
+      kategorien: "Liste aller Kategorien, sortiert nach kategorie_id. Die Reihenfolge ist kein Rang: " +
+        "Haupt- und Zweitkategorie entscheidet allein die Konfidenz",
       "kategorien[].name": "Name, so an POST klassifizierung_setzen schicken",
       "kategorien[].beschreibung": "was die Kategorie umfasst und wogegen sie sich abgrenzt",
     },
