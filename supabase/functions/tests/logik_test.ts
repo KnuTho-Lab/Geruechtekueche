@@ -4,8 +4,8 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   ABLAUF_FUER_AGENTEN,
   ABWEISUNGSGRUENDE,
-  AEHNLICHKEITS_SCHWELLE,
   ALLGEMEINE_FEHLER,
+  AUSGEHENDE_AUFRUFE,
   baueAufrufProtokoll,
   baueEmbeddingAnfrage,
   baueGeruechteSeite,
@@ -17,7 +17,6 @@ import {
   EMOTIONEN,
   endpunktAusPfad,
   ENDPUNKTE,
-  entscheideZuordnung,
   GESCHWAERZTE_NAMEN_MAX,
   KERNAUSSAGE_MAX,
   KLASSIFIZIERUNG_FELDER,
@@ -28,7 +27,6 @@ import {
   MELDUNG_FEHLER,
   MELDUNGSSCHEMA,
   parseEmbeddingAntwort,
-  parseTreffer,
   parseGeruechtId,
   parsePaginierung,
   parseStatusFilter,
@@ -50,8 +48,8 @@ import {
   waehleAdminKey,
   wendeSonstigesRegelAn,
   ZWEITKATEGORIE_AB,
-  zuordnungsProtokoll,
 } from "../_shared/logik.ts";
+import { baueMeldungAntwort, parseNachholAnzahl } from "../_shared/zuordnung_logik.ts";
 
 // --- parseStatusFilter -------------------------------------------------------
 
@@ -465,60 +463,15 @@ Deno.test("embedding: Vektor als Text in pgvector-Schreibweise", () => {
   assertEquals(vektorAlsText([0.5, -0.25, 1e-7]), "[0.5,-0.25,1e-7]");
 });
 
-// --- Suchtreffer und Zuordnung -----------------------------------------------
-
-Deno.test("treffer: leere Liste heisst kein Treffer", () => {
-  assertEquals(parseTreffer([]), { ok: true, wert: null });
-});
-
-Deno.test("treffer: erste Zeile wird uebernommen", () => {
-  assertEquals(parseTreffer([{ geruecht_id: 7, aehnlichkeit: 0.91 }]), {
-    ok: true,
-    wert: { geruecht_id: 7, aehnlichkeit: 0.91 },
-  });
-});
-
-Deno.test("treffer: kaputte Formen -> Fehler", () => {
-  for (const roh of [null, {}, "x", [null], [{}], [{ geruecht_id: "7", aehnlichkeit: 0.9 }],
-    [{ geruecht_id: 0, aehnlichkeit: 0.9 }], [{ geruecht_id: 7 }], [{ geruecht_id: 7, aehnlichkeit: NaN }]]) {
-    assert(!parseTreffer(roh).ok, `sollte ungueltig sein: ${JSON.stringify(roh)}`);
-  }
-});
-
-Deno.test("zuordnung: explizite geruecht_id gewinnt immer, auch gegen einen Treffer", () => {
-  assertEquals(entscheideZuordnung(3, { geruecht_id: 9, aehnlichkeit: 0.99 }, 0.8), {
-    art: "explizit",
-    geruecht_id: 3,
-    aehnlichkeit: null,
-  });
-  assertEquals(entscheideZuordnung(3, null, 0.8).art, "explizit");
-});
-
-Deno.test("zuordnung: Treffer ab Schwelle ordnet zu, Grenze selbst zaehlt", () => {
-  assertEquals(entscheideZuordnung(null, { geruecht_id: 9, aehnlichkeit: 0.85 }, 0.8), {
-    art: "embedding",
-    geruecht_id: 9,
-    aehnlichkeit: 0.85,
-  });
-  assertEquals(entscheideZuordnung(null, { geruecht_id: 9, aehnlichkeit: 0.8 }, 0.8).art, "embedding");
-});
-
-Deno.test("zuordnung: Treffer unter Schwelle oder kein Treffer -> neues Geruecht", () => {
-  const neu = { art: "neu", geruecht_id: null, aehnlichkeit: null } as const;
-  assertEquals(entscheideZuordnung(null, { geruecht_id: 9, aehnlichkeit: 0.7999 }, 0.8), neu);
-  assertEquals(entscheideZuordnung(null, null, 0.8), neu);
-});
-
-Deno.test("zuordnung: Standard ist AEHNLICHKEITS_SCHWELLE, ein sinnvoller Wert", () => {
-  assert(AEHNLICHKEITS_SCHWELLE > 0 && AEHNLICHKEITS_SCHWELLE < 1);
-  const knapp = entscheideZuordnung(null, { geruecht_id: 1, aehnlichkeit: AEHNLICHKEITS_SCHWELLE });
-  assertEquals(knapp.art, "embedding");
-  const darunter = entscheideZuordnung(null, { geruecht_id: 1, aehnlichkeit: AEHNLICHKEITS_SCHWELLE - 0.001 });
-  assertEquals(darunter.art, "neu");
-});
+// --- Antwort von POST /meldung ---------------------------------------------
 
 Deno.test("meldungsschema: Antwortbeispiel und Feldbeschreibung passen zueinander", () => {
   assertEquals(Object.keys(MELDUNG_ANTWORT_BEISPIEL).sort(), Object.keys(MELDUNG_ANTWORT_FELDER).sort());
+});
+
+Deno.test("meldungsschema: Feldbeschreibung passt zur echten Antwort von POST /meldung", () => {
+  const echt = baueMeldungAntwort(1, { art: "neu", geruecht_id: 2, neues_geruecht: true, geruecht_aehnlichkeit: null }, null);
+  assertEquals(Object.keys(MELDUNG_ANTWORT_FELDER).sort(), Object.keys(echt).sort());
 });
 
 // --- pruefeApiKey ------------------------------------------------------------
@@ -641,6 +594,7 @@ const VALIDATOREN: Record<string, (b: unknown) => { ok: boolean }> = {
   meldung: validiereMeldung,
   klassifizierung_setzen: validiereKlassifizierung,
   abweisung: validiereAbweisung,
+  zuordnung_nachholen: parseNachholAnzahl,
 };
 
 Deno.test("calls: jeder POST-Endpunkt hat einen Validator fuer seine Beispiele", () => {
@@ -706,6 +660,11 @@ Deno.test("calls: Parameter von meldung sind genau die Felder des Meldungsschema
   const meldung = ENDPUNKTE.find((e) => e.name === "meldung")!;
   assertEquals(meldung.parameter.map((p) => p.name).sort(), Object.keys(MELDUNGSSCHEMA.properties).sort());
   assertEquals(meldung.parameter.filter((p) => p.pflicht).map((p) => p.name), MELDUNGSSCHEMA.required);
+});
+
+Deno.test("calls: der Pruef-Workflow steht unter den ausgehenden Aufrufen", () => {
+  const namen = AUSGEHENDE_AUFRUFE.map((a) => a.name);
+  assertEquals(namen, ["klassifizierung_anstossen", "zuordnung_pruefen"]);
 });
 
 Deno.test("calls: Antwort von meldung ist die aus dem Meldungsschema, Rate-Limit dokumentiert", () => {
@@ -980,34 +939,3 @@ Deno.test("protokoll: abgelehnte Aufrufe (401, 405) nicht in die Datenbank, alle
   for (const s of [200, 201, 400, 404, 409, 429, 500]) assertEquals(sollInDbProtokolliertWerden(s), true, String(s));
 });
 
-Deno.test("zuordnungsprotokoll: explizit ohne Suche", () => {
-  assertEquals(zuordnungsProtokoll(entscheideZuordnung(5, null), null), {
-    zuordnung_art: "explizit",
-    beste_aehnlichkeit: null,
-  });
-});
-
-Deno.test("zuordnungsprotokoll: per Embedding mit der Aehnlichkeit des Treffers", () => {
-  const treffer = { geruecht_id: 3, aehnlichkeit: 0.91 };
-  assertEquals(zuordnungsProtokoll(entscheideZuordnung(null, treffer), treffer), {
-    zuordnung_art: "embedding",
-    beste_aehnlichkeit: 0.91,
-  });
-});
-
-Deno.test("zuordnungsprotokoll: neu, aber die beste Aehnlichkeit unter der Schwelle bleibt erhalten", () => {
-  const treffer = { geruecht_id: 3, aehnlichkeit: 0.66 };
-  assertEquals(zuordnungsProtokoll(entscheideZuordnung(null, treffer), treffer), {
-    zuordnung_art: "neu",
-    beste_aehnlichkeit: 0.66,
-  });
-  assertEquals(zuordnungsProtokoll(entscheideZuordnung(null, null), null), {
-    zuordnung_art: "neu",
-    beste_aehnlichkeit: null,
-  });
-});
-
-Deno.test("zuordnungsprotokoll: bei expliziter geruecht_id zaehlt kein Suchtreffer", () => {
-  const treffer = { geruecht_id: 3, aehnlichkeit: 0.95 };
-  assertEquals(zuordnungsProtokoll(entscheideZuordnung(5, treffer), treffer).beste_aehnlichkeit, null);
-});

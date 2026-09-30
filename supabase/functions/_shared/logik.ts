@@ -1,5 +1,13 @@
 // Reine Logik der Edge Functions: keine Datenbank, kein Netzwerk, deshalb direkt testbar.
 // Tests: supabase/functions/tests/logik_test.ts
+import {
+  NACHHOLEN_HUCKEPACK,
+  NACHHOLEN_MAX,
+  NACHHOLEN_STANDARD,
+  ZUORDNUNG_PRUEFEN_AB,
+  ZUORDNUNG_SICHER_AB,
+  ZUORDNUNG_ZEITLIMIT_MS,
+} from "./zuordnung_logik.ts";
 
 export const STATUS_WERTE = ["offen", "bestätigt", "widerlegt", "nicht prüfbar"] as const;
 export type Status = typeof STATUS_WERTE[number];
@@ -327,15 +335,8 @@ export const EMBEDDING_URL = "https://openrouter.ai/api/v1/embeddings";
 // Gemessen am 2026-09-25, muss zur Spalte meldungen.embedding (halfvec(3072)) passen
 export const EMBEDDING_DIMENSION = 3072;
 
-// PLATZHALTER: Ab dieser Kosinus-Aehnlichkeit gilt eine Meldung als dasselbe Geruecht.
-// Wird spaeter mit 40 bis 60 von Hand markierten Meldungspaaren kalibriert.
-// Startwert 0.80 aus Stichproben vom 2026-09-25 (gemini-embedding-001):
-//   gleiches Geruecht, umformuliert:          0.79 bis 0.97
-//   verschiedene Geruechte:                   0.56 bis 0.66
-//   verschiedene Geruechte, beide mit [TEST]: 0.68 bis 0.76 (gemeinsames Praefix hebt an)
-// Eher hoch gewaehlt: eine falsche Zusammenlegung verfaelscht eine Akte, eine falsche
-// Trennung ergibt nur zwei Akten zum selben Geruecht.
-export const AEHNLICHKEITS_SCHWELLE = 0.8;
+// Die Zuordnung selbst (Average Linkage, Zonen, LLM-Pruefung) steht seit 2026-09-30 in
+// zuordnung_logik.ts. Die fruehere Einzelschwelle 0,8 (Single Linkage) ist entfallen.
 
 export function baueEmbeddingAnfrage(text: string) {
   return { model: EMBEDDING_MODELL, input: text };
@@ -369,54 +370,6 @@ export function parseEmbeddingAntwort(roh: unknown, dimension = EMBEDDING_DIMENS
 // PostgREST nimmt den Vektor als Text in pgvector-Schreibweise '[0.1,0.2,...]' entgegen
 export function vektorAlsText(vektor: number[]): string {
   return JSON.stringify(vektor);
-}
-
-export interface Treffer {
-  geruecht_id: number;
-  aehnlichkeit: number;
-}
-
-// Ergebnis von .rpc("aehnlichstes_geruecht"): keine oder eine Zeile
-export function parseTreffer(roh: unknown): Ergebnis<Treffer | null> {
-  if (!Array.isArray(roh)) return fehler("Suchergebnis ist keine Liste");
-  if (roh.length === 0) return ok(null);
-  const z = roh[0] as Record<string, unknown> | null;
-  const id = typeof z?.geruecht_id === "number" ? parseGeruechtId(z.geruecht_id) : parseGeruechtId(null);
-  const aehnlichkeit = z?.aehnlichkeit;
-  if (!id.ok || typeof aehnlichkeit !== "number" || !Number.isFinite(aehnlichkeit)) {
-    return fehler("Suchergebnis hat keine gueltige geruecht_id und aehnlichkeit");
-  }
-  return ok({ geruecht_id: id.wert, aehnlichkeit });
-}
-
-export type Zuordnung =
-  | { art: "explizit"; geruecht_id: number; aehnlichkeit: null }
-  | { art: "embedding"; geruecht_id: number; aehnlichkeit: number }
-  | { art: "neu"; geruecht_id: null; aehnlichkeit: null };
-
-// Entscheidet, wohin eine Meldung gehoert. Eine angegebene geruecht_id gewinnt immer.
-// Die Schwelle wird hier noch einmal geprueft, auch wenn die Datenbank schon filtert:
-// die Entscheidung haengt so nicht allein an der SQL-Funktion.
-export function entscheideZuordnung(
-  explizit: number | null,
-  treffer: Treffer | null,
-  schwelle = AEHNLICHKEITS_SCHWELLE,
-): Zuordnung {
-  if (explizit !== null) return { art: "explizit", geruecht_id: explizit, aehnlichkeit: null };
-  if (treffer && treffer.aehnlichkeit >= schwelle) {
-    return { art: "embedding", geruecht_id: treffer.geruecht_id, aehnlichkeit: treffer.aehnlichkeit };
-  }
-  return { art: "neu", geruecht_id: null, aehnlichkeit: null };
-}
-
-// Was von der Zuordnung an der Meldung gespeichert wird. beste_aehnlichkeit ist die
-// Aehnlichkeit des besten Suchtreffers, auch unterhalb der Schwelle: genau diese Werte
-// braucht das Kalibrieren. Bei expliziter geruecht_id wurde nicht gesucht.
-export function zuordnungsProtokoll(zuordnung: Zuordnung, treffer: Treffer | null) {
-  return {
-    zuordnung_art: zuordnung.art,
-    beste_aehnlichkeit: zuordnung.art === "explizit" ? null : treffer?.aehnlichkeit ?? null,
-  };
 }
 
 // --- Aufruf-Protokoll ---------------------------------------------------------
@@ -744,9 +697,10 @@ export const MELDUNGSSCHEMA = {
       minimum: 1,
       description:
         "Optional. Gesetzt: Meldung wird genau diesem bestehenden Gerücht zugeordnet (IDs aus GET /functions/v1/geruechte). " +
-        "Weggelassen: die Meldung wird per Embedding dem ähnlichsten bestehenden Gerücht zugeordnet, " +
-        `wenn die Kosinus-Ähnlichkeit mindestens ${AEHNLICHKEITS_SCHWELLE} beträgt. Sonst entsteht ein neues Gerücht, ` +
-        "die Kategorie vergibt danach der Klassifizierungs-Workflow.",
+        "Weggelassen: das Backend ordnet per Embedding zu. Maßgeblich ist die durchschnittliche Ähnlichkeit " +
+        `zu allen Meldungen eines Gerüchts: ab ${ZUORDNUNG_SICHER_AB} direkt, ab ${ZUORDNUNG_PRUEFEN_AB} nach ` +
+        `Prüfung durch ein LLM, darunter entsteht ein neues Gerücht. Scheitert die Zuordnung, bleibt die Meldung ` +
+        "vorerst ohne Gerücht (zuordnung_offen) und wird nachgeholt. Die Kategorie vergibt danach der Klassifizierungs-Workflow.",
     },
     standort: {
       type: ["string", "null"],
@@ -777,6 +731,8 @@ export const MELDUNG_ANTWORT_BEISPIEL = {
   meldung_id: 12,
   geruecht_id: 7,
   neues_geruecht: false,
+  zuordnung: "geprueft",
+  zuordnung_offen: false,
   per_embedding_zugeordnet: true,
   aehnlichkeit: 0.87,
   embedding_fehler: null,
@@ -784,12 +740,17 @@ export const MELDUNG_ANTWORT_BEISPIEL = {
 
 export const MELDUNG_ANTWORT_FELDER = {
   meldung_id: "ID der gespeicherten Meldung",
-  geruecht_id: "Gerücht, dem die Meldung zugeordnet wurde. Der meldenden Person als Vorgangsnummer nennen.",
+  geruecht_id: "Gerücht, dem die Meldung zugeordnet wurde. Der meldenden Person als Vorgangsnummer nennen. " +
+    "null, wenn die Zuordnung noch offen ist.",
   neues_geruecht: "true, wenn dafür ein neues Gerücht angelegt wurde",
-  per_embedding_zugeordnet: "true, wenn die Zuordnung über die Ähnlichkeitssuche kam (nicht über geruecht_id)",
-  aehnlichkeit: "Kosinus-Ähnlichkeit zur ähnlichsten Meldung, nur bei per_embedding_zugeordnet, sonst null",
-  embedding_fehler: "null, wenn alles lief. Sonst der Grund, warum kein Embedding gespeichert oder nicht gesucht " +
-    "werden konnte. Die Meldung ist trotzdem gespeichert, ohne geruecht_id dann in einem neuen Gerücht.",
+  zuordnung: "explizit (geruecht_id mitgeschickt), embedding (sicher per Ähnlichkeit), geprueft (im Graubereich " +
+    "vom LLM bestätigt), neu (neues Gerücht) oder offen (Zuordnung gescheitert, wird nachgeholt)",
+  zuordnung_offen: "true, wenn die Meldung gespeichert ist, aber noch kein Gerücht hat. Dann die meldung_id als " +
+    "Vorgangsnummer nennen, das Gerücht folgt.",
+  per_embedding_zugeordnet: "true bei zuordnung embedding oder geprueft",
+  aehnlichkeit: "durchschnittliche Kosinus-Ähnlichkeit zum zugeordneten Gerücht, nur bei per_embedding_zugeordnet, sonst null",
+  embedding_fehler: "null, wenn alles lief. Sonst der Grund, warum kein Embedding gespeichert werden konnte. " +
+    "Die Meldung ist trotzdem gespeichert und bleibt offen, bis das Nachholen es erneut versucht.",
 };
 
 // Fehler, die jeder Endpunkt ueber den gemeinsamen Rahmen (_shared/http.ts) liefern kann.
@@ -821,6 +782,22 @@ export const AUSGEHENDE_AUFRUFE = [
     hinweis: "Timeout 5 s, kein Retry. Jeder Anstoß samt Status steht in der Tabelle klassifizierung_anstoesse, " +
       "hängende Gerüchte zeigt die View haengende_klassifizierungen.",
   },
+  {
+    name: "zuordnung_pruefen",
+    ausloeser: "POST meldung oder POST zuordnung_nachholen, wenn der beste Kandidat im Graubereich liegt " +
+      `(durchschnittliche Ähnlichkeit ab ${ZUORDNUNG_PRUEFEN_AB} und unter ${ZUORDNUNG_SICHER_AB})`,
+    ziel: "n8n-Workflow Zuordnungs-Prüfung, URL aus dem Secret ZUORDNUNG_WEBHOOK_URL",
+    methode: "POST",
+    header: { "x-webhook-secret": "Wert aus dem Secret ZUORDNUNG_WEBHOOK_SECRET" },
+    body: {
+      meldung: "{meldung_id, text}",
+      kandidaten: "1 bis 3 Einträge {geruecht_id, kernaussage (kann null sein), beispiele (1 bis 3 Meldungstexte)}",
+    },
+    antwort: { geruecht_id: "eine der angebotenen IDs oder null (keiner passt)", begruendung: "ein bis zwei Sätze" },
+    hinweis: `Synchron, Zeitlimit ${ZUORDNUNG_ZEITLIMIT_MS / 1000} s. Fehler, Zeitüberschreitung oder ungültige ` +
+      "Antwort: die Meldung bleibt offen und wird nachgeholt, es entsteht kein neues Gerücht. Jede Prüfung steht in " +
+      "der Tabelle zuordnung_pruefungen, offene Meldungen zeigt die View offene_zuordnungen. Vertrag: docs/zuordnung-pruefung.md.",
+  },
 ];
 
 // Transparenz fuer die Aufrufer: was die API ueber jeden Aufruf festhaelt
@@ -841,7 +818,7 @@ export const ABLAUF_FUER_AGENTEN = [
   "4. POST meldung mit text und, soweit aus dem Gespräch bekannt, standort, emotion, quellenkette und " +
   "geschwaerzte_namen. Nichts raten: Unbekanntes weglassen.",
   "5. Die geruecht_id aus der Antwort der meldenden Person als Vorgangsnummer nennen. Den Stand liefert später " +
-  "GET status?geruecht_id=…",
+  "GET status?geruecht_id=… Ist zuordnung_offen true, ist die Meldung trotzdem angenommen: dann die meldung_id nennen.",
 ];
 
 export const ENDPUNKTE: Endpunkt[] = [
@@ -986,8 +963,11 @@ export const ENDPUNKTE: Endpunkt[] = [
   ep({
     name: "meldung",
     methode: "POST",
-    beschreibung: "Speichert eine Meldung samt Embedding. Ohne geruecht_id wird sie per Ähnlichkeitssuche " +
-      "dem passenden bestehenden Gerücht zugeordnet, sonst entsteht ein neues. Rate-Limit projektweit.",
+    beschreibung: "Speichert eine Meldung samt Embedding. Ohne geruecht_id ordnet das Backend sie zu: nach der " +
+      `durchschnittlichen Ähnlichkeit zu allen Meldungen eines Gerüchts, ab ${ZUORDNUNG_SICHER_AB} direkt, im ` +
+      `Graubereich ab ${ZUORDNUNG_PRUEFEN_AB} nach Prüfung durch ein LLM, darunter als neues Gerücht. Im Graubereich ` +
+      "dauert die Antwort einige Sekunden länger. Scheitert die Zuordnung, bleibt die Meldung offen und wird " +
+      "nachgeholt. Rate-Limit projektweit.",
     wann_nutzen: "Für jede Eingabe, die ein Gerücht ist: eine Behauptung über einen Sachverhalt im Unternehmen, " +
       "Namen durch Rollen ersetzt. Eine Meldung pro Gerücht, nicht pro Gesprächsnachricht.",
     parameter: MELDUNG_PARAMETER,
@@ -1019,6 +999,41 @@ export const ENDPUNKTE: Endpunkt[] = [
     erfolg: 201,
     antwort: { abweisung_id: "ID des Eintrags", grund: "wie gesendet" },
     fehler: { "400": "Body ungültig, grund fehlt oder ist unbekannt, oder unbekanntes Feld (etwa 'text')" },
+  }),
+  ep({
+    name: "zuordnung_nachholen",
+    methode: "POST",
+    beschreibung: "Ordnet offene Meldungen erneut zu (zuordnung_offen, weil Embedding, Suche oder Prüf-Workflow " +
+      "beim ersten Versuch gescheitert sind). Die ältesten zuerst, nacheinander. Jede neue Meldung holt im " +
+      `Hintergrund ohnehin bis zu ${NACHHOLEN_HUCKEPACK} offene mit nach.`,
+    wann_nutzen: "Nicht für den Intake-Agenten. Für Wartung und Zeitpläne, etwa nachdem der Prüf-Workflow wieder läuft.",
+    parameter: [
+      {
+        name: "anzahl",
+        ort: "body",
+        pflicht: false,
+        typ: "integer",
+        beschreibung: `Wie viele offene Meldungen höchstens bearbeitet werden, Standard ${NACHHOLEN_STANDARD}. ` +
+          "Ohne Body gilt der Standard.",
+        grenzen: `1 bis ${NACHHOLEN_MAX}`,
+        werte: null,
+        beispiel: 5,
+      },
+    ],
+    beispiel_aufruf: { body: { anzahl: 5 } },
+    erfolg: 200,
+    antwort: {
+      bearbeitet: "Anzahl der bearbeiteten offenen Meldungen",
+      "ergebnisse[].meldung_id": "bearbeitete Meldung",
+      "ergebnisse[].zuordnung": "embedding, geprueft, neu oder weiterhin offen",
+      "ergebnisse[].geruecht_id": "zugeordnetes Gerücht, null wenn weiterhin offen",
+      "ergebnisse[].neues_geruecht": "true, wenn dafür ein neues Gerücht angelegt wurde",
+      "ergebnisse[].fehler": "Grund, warum sie offen bleibt, sonst null",
+      noch_offen: "offene Meldungen nach diesem Aufruf",
+    },
+    fehler: {
+      "400": "Body ungültig oder anzahl außerhalb der Grenzen",
+    },
   }),
   ep({
     name: "klassifizierung_setzen",

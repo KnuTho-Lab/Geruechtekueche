@@ -1,7 +1,11 @@
 """Integrationstest gegen die deployten Edge Functions.
 
-Legt Testdaten an (Text beginnt mit [TEST]) und loescht genau diese am Ende wieder
-per Supabase-CLI. Braucht die Umgebungsvariablen:
+Legt Testdaten an (Meldungen mit user_id 'integrationstest') und loescht genau diese
+samt ihrer Geruechte am Ende wieder per Supabase-CLI.
+Die Texte tragen bewusst KEIN gemeinsames Praefix wie "[TEST]": ein gemeinsames Praefix hebt
+die Embedding-Aehnlichkeit unverwandter kurzer Texte auf 0,75 bis 0,82, also in den
+Graubereich der Zuordnung. Alle Texte sind gegeneinander und gegen den Live-Bestand vom
+2026-09-30 gemessen: ungewollte Paare hoechstens 0,70, die gewollten stehen am Test. Braucht die Umgebungsvariablen:
   GERUECHTE_BASE_URL  z.B. https://<ref>.supabase.co/functions/v1
   GERUECHTE_API_KEY   derselbe Schluessel wie das Supabase-Secret
 Ausfuehren im Repo-Root:  python -m unittest tests/test_endpunkte.py -v
@@ -18,6 +22,7 @@ import urllib.request
 BASE = os.environ.get("GERUECHTE_BASE_URL", "").rstrip("/")
 KEY = os.environ.get("GERUECHTE_API_KEY", "")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TEST_NUTZER = "integrationstest"
 
 
 def sql(abfrage):
@@ -67,12 +72,18 @@ class EndpunkteTest(unittest.TestCase):
     def tearDownClass(cls):
         ids_m = ",".join(str(i) for i in cls.meldungen) or "0"
         ids_g = ",".join(str(i) for i in cls.neue_geruechte) or "0"
-        # Das Anstoss-Protokoll verschwindet per ON DELETE CASCADE mit dem Geruecht.
+        # Auch Geruechte, die erst beim Nachholen fuer eine offene Testmeldung entstanden
+        # sind, werden erfasst. Geloescht wird ein Geruecht nur, wenn danach keine Meldung
+        # mehr darin liegt, echte Geruechte bleiben also unangetastet.
+        # Anstoss- und Pruefprotokoll verschwinden per ON DELETE CASCADE mit.
         # Aufrufe echter Nutzer im selben Zeitfenster wuerden mitgeloescht, das ist bei
         # Testlaeufen in Kauf genommen.
         sql = (
-            f"delete from meldungen where meldung_id in ({ids_m}) and text like '[TEST]%';\n"
-            f"delete from geruechte g where geruecht_id in ({ids_g}) "
+            f"create temp table test_geruechte as select distinct geruecht_id from meldungen "
+            f"where meldung_id in ({ids_m}) and user_id = '{TEST_NUTZER}' and geruecht_id is not null;\n"
+            f"delete from meldungen where meldung_id in ({ids_m}) and user_id = '{TEST_NUTZER}';\n"
+            f"delete from geruechte g where (geruecht_id in ({ids_g}) "
+            f"or geruecht_id in (select geruecht_id from test_geruechte)) "
             f"and not exists (select 1 from meldungen m where m.geruecht_id = g.geruecht_id);\n"
             f"delete from api_aufrufe where zeitpunkt >= '{cls.start}';\n"
             f"delete from abweisungen where zeitpunkt >= '{cls.start}';\n"
@@ -89,8 +100,7 @@ class EndpunkteTest(unittest.TestCase):
             os.unlink(pfad)
 
     def neue_meldung(self, **felder):
-        body = dict(felder)
-        body["text"] = "[TEST] " + body.get("text", "Integrationstest")
+        body = {"user_id": TEST_NUTZER, **felder}
         status, antwort = aufruf("POST", "meldung", body)
         self.assertEqual(status, 201, antwort)
         type(self).meldungen.append(antwort["meldung_id"])
@@ -103,7 +113,8 @@ class EndpunkteTest(unittest.TestCase):
     def test_ohne_oder_mit_falschem_schluessel_401(self):
         for name, methode in [("calls", "GET"), ("kategorien", "GET"), ("geruechte", "GET"),
                               ("status", "GET"), ("meldungsschema", "GET"), ("meldung", "POST"),
-                              ("klassifizierung_setzen", "POST"), ("abweisung", "POST")]:
+                              ("klassifizierung_setzen", "POST"), ("abweisung", "POST"),
+                              ("zuordnung_nachholen", "POST")]:
             with self.subTest(name=name):
                 self.assertEqual(aufruf(methode, name, key=None)[0], 401)
                 self.assertEqual(aufruf(methode, name, key="falsch")[0], 401)
@@ -119,7 +130,9 @@ class EndpunkteTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(sorted(e["name"] for e in a["endpunkte"]),
                          ["abweisung", "calls", "geruechte", "kategorien", "klassifizierung_setzen",
-                          "meldung", "meldungsschema", "status"])
+                          "meldung", "meldungsschema", "status", "zuordnung_nachholen"])
+        self.assertEqual([x["name"] for x in a["ausgehende_aufrufe"]],
+                         ["klassifizierung_anstossen", "zuordnung_pruefen"])
         self.assertEqual(sorted(a["allgemeine_fehler"]), ["401", "405", "500"])
         self.assertEqual(sorted(a), ["ablauf_fuer_agenten", "allgemeine_fehler", "ausgehende_aufrufe",
                                      "authentifizierung", "basis_url", "endpunkte", "protokollierung"])
@@ -200,7 +213,7 @@ class EndpunkteTest(unittest.TestCase):
         self.assertEqual(a["schema"]["required"], ["text"])
         self.assertEqual(sorted(a["antwort_felder"]),
                          ["aehnlichkeit", "embedding_fehler", "geruecht_id", "meldung_id",
-                          "neues_geruecht", "per_embedding_zugeordnet"])
+                          "neues_geruecht", "per_embedding_zugeordnet", "zuordnung", "zuordnung_offen"])
         self.assertEqual(sorted(a["fehler"]), ["400", "401", "404", "405", "429", "500"])
 
     def test_geruechte_status_pflicht_und_geprueft(self):
@@ -214,8 +227,8 @@ class EndpunkteTest(unittest.TestCase):
 
     def test_geruechte_paginierung(self):
         # Zwei eigene Geruechte sicherstellen, damit es mindestens zwei Seiten gibt
-        for text in ("Die Betriebsfeier fällt dieses Jahr aus",
-                     "Im Lager werden nächsten Monat neue Scanner eingeführt"):
+        for text in ("Der Pförtner trägt ab Montag einen Zylinder",
+                     "Die Kaffeemaschine in Etage 4 spielt beim Brühen Opernarien"):
             self.neue_meldung(text=text)
         status, alle = aufruf("GET", "geruechte", query={"status": "all", "limit": 200})
         self.assertEqual(status, 200)
@@ -262,8 +275,9 @@ class EndpunkteTest(unittest.TestCase):
         self.assertEqual(status, 404)
 
     def test_durchstich_neues_geruecht_dann_zuordnen(self):
-        erste = self.neue_meldung(text="Abteilung X wird aufgelöst", user_id="test-user")
-        self.assertTrue(erste["neues_geruecht"])
+        erste = self.neue_meldung(text="Abteilung X wird aufgelöst")
+        self.assertTrue(erste["neues_geruecht"], erste)
+        self.assertEqual(erste["zuordnung"], "neu")
         gid = erste["geruecht_id"]
 
         status, a = aufruf("GET", "status", query={"geruecht_id": gid})
@@ -274,6 +288,7 @@ class EndpunkteTest(unittest.TestCase):
         self.assertEqual(zweite["geruecht_id"], gid)
         # Explizite Zuordnung: keine Suche, aber das Embedding wird trotzdem gespeichert
         self.assertFalse(zweite["per_embedding_zugeordnet"])
+        self.assertEqual(zweite["zuordnung"], "explizit")
         self.assertIsNone(zweite["aehnlichkeit"])
         self.assertIsNone(zweite["embedding_fehler"])
         zeile = sql(f"select embedding is not null as hat_embedding from meldungen "
@@ -302,53 +317,86 @@ class EndpunkteTest(unittest.TestCase):
         # entweder noch leer oder eine gueltige Kategorie
         kategorien = [k["name"] for k in aufruf("GET", "kategorien")[1]["kategorien"]]
         self.assertIn(eintrag["kategorie"], [None, *kategorien])
-        self.assertEqual(eintrag["beispieltext"], "[TEST] Abteilung X wird aufgelöst")
+        self.assertEqual(eintrag["beispieltext"], "Abteilung X wird aufgelöst")
 
-    def test_embedding_aehnliche_meldungen_landen_im_selben_geruecht(self):
-        # Texte mit gemessener Aehnlichkeit (2026-09-25): Parkplatz-Paar 0.97, alle anderen
-        # Paare untereinander und mit den uebrigen Testtexten hoechstens 0.76
-        erste = self.neue_meldung(text="Der Parkplatz hinter Halle 3 wird ab März gesperrt")
+    def test_zonen_sicher_graubereich_neu(self):
+        # Gemessen 2026-09-30 (gemini-embedding-001): Bienen-Paraphrase 0,978 (sicher),
+        # "keine Bienenstoecke" im Mittel 0,906 zum Bienen-Geruecht (Graubereich),
+        # Firmenhund zu allem hoechstens 0,69 (neu). Kein Text aehnelt dem Live-Bestand ueber 0,70.
+        erste = self.neue_meldung(text="Auf dem Dach von Gebäude 9 sollen Bienenstöcke aufgestellt werden")
         self.assertIsNone(erste["embedding_fehler"])
-        self.assertTrue(erste["neues_geruecht"])
+        self.assertEqual((erste["zuordnung"], erste["neues_geruecht"], erste["zuordnung_offen"]), ("neu", True, False))
         self.assertFalse(erste["per_embedding_zugeordnet"])
         self.assertIsNone(erste["aehnlichkeit"])
+        gid = erste["geruecht_id"]
 
-        # Sinngleich, anders formuliert, ohne geruecht_id -> dasselbe Geruecht
-        zweite = self.neue_meldung(text="Ab März kann man hinter Halle 3 nicht mehr parken")
-        self.assertIsNone(zweite["embedding_fehler"])
-        self.assertFalse(zweite["neues_geruecht"])
+        # Sicher: ab 0,95 ohne Pruefung ins selbe Geruecht
+        zweite = self.neue_meldung(text="Auf dem Dach von Gebäude 9 werden Bienenstöcke aufgestellt")
+        self.assertEqual((zweite["zuordnung"], zweite["geruecht_id"], zweite["neues_geruecht"]), ("embedding", gid, False))
         self.assertTrue(zweite["per_embedding_zugeordnet"])
-        self.assertEqual(zweite["geruecht_id"], erste["geruecht_id"])
-        self.assertGreaterEqual(zweite["aehnlichkeit"], 0.8)
-        self.assertLessEqual(zweite["aehnlichkeit"], 1.0)
+        self.assertGreaterEqual(zweite["aehnlichkeit"], 0.95)
 
-        # Anderes Thema -> neues Geruecht
-        dritte = self.neue_meldung(text="Die Firma führt ein neues Zeiterfassungssystem ein")
-        self.assertIsNone(dritte["embedding_fehler"])
-        self.assertTrue(dritte["neues_geruecht"])
-        self.assertFalse(dritte["per_embedding_zugeordnet"])
-        self.assertNotEqual(dritte["geruecht_id"], erste["geruecht_id"])
+        # Graubereich: das Gegenteil darf nie ungeprueft ins Bienen-Geruecht. Ohne
+        # konfigurierten Pruef-Workflow bleibt die Meldung offen, mit ihm entscheidet das LLM
+        # (erwartet: keiner passt, also neu)
+        dritte = self.neue_meldung(text="Auf dem Dach von Gebäude 9 sollen keine Bienenstöcke aufgestellt werden")
+        self.assertIn(dritte["zuordnung"], ("offen", "neu"), dritte)
+        self.assertNotEqual(dritte["geruecht_id"], gid)
+        pruefung = sql(f"select ergebnis, fehler, kandidaten from zuordnung_pruefungen "
+                       f"where meldung_id = {int(dritte['meldung_id'])} order by pruefung_id;")
+        self.assertGreaterEqual(len(pruefung), 1)
+        self.assertEqual(pruefung[0]["kandidaten"][0]["geruecht_id"], gid)
+        self.assertTrue(0.75 <= pruefung[0]["kandidaten"][0]["aehnlichkeit"] < 0.95, pruefung[0])
+        if dritte["zuordnung"] == "offen":
+            self.assertIsNone(dritte["geruecht_id"])
+            self.assertTrue(dritte["zuordnung_offen"])
+            self.assertEqual(pruefung[0]["ergebnis"], "fehler")
+            offen = sql(f"select versuche from offene_zuordnungen where meldung_id = {int(dritte['meldung_id'])};")
+            self.assertEqual(len(offen), 1)
+        else:
+            self.assertEqual(pruefung[0]["ergebnis"], "keiner")
 
-        # Alle drei Embeddings liegen mit voller Laenge in der Datenbank
-        ids = ",".join(str(int(a["meldung_id"])) for a in (erste, zweite, dritte))
-        zeilen = sql(f"select extensions.vector_dims(embedding) as dim from meldungen "
-                     f"where meldung_id in ({ids});")
-        self.assertEqual([z["dim"] for z in zeilen], [3072, 3072, 3072])
+        # Neu: unter 0,75
+        vierte = self.neue_meldung(text="Der Firmenhund soll einen eigenen Ausweis bekommen")
+        self.assertEqual((vierte["zuordnung"], vierte["neues_geruecht"]), ("neu", True))
 
-        # Zuordnung samt bester Aehnlichkeit, auch unter der Schwelle, steht an der Meldung
+        # An den Meldungen: Art, Einzel- und Geruecht-Aehnlichkeit, volle Embeddings
+        ids = ",".join(str(int(x["meldung_id"])) for x in (erste, zweite, dritte, vierte))
         zeilen = {z["meldung_id"]: z for z in sql(
-            f"select meldung_id, zuordnung_art, beste_aehnlichkeit from meldungen where meldung_id in ({ids});")}
-        z2, z3 = zeilen[zweite["meldung_id"]], zeilen[dritte["meldung_id"]]
+            f"select meldung_id, zuordnung_art, beste_aehnlichkeit, geruecht_aehnlichkeit, "
+            f"extensions.vector_dims(embedding) as dim from meldungen where meldung_id in ({ids});")}
+        self.assertEqual([zeilen[x["meldung_id"]]["dim"] for x in (erste, zweite, dritte, vierte)], [3072] * 4)
+        z2 = zeilen[zweite["meldung_id"]]
         self.assertEqual(z2["zuordnung_art"], "embedding")
-        self.assertAlmostEqual(z2["beste_aehnlichkeit"], zweite["aehnlichkeit"], places=6)
-        self.assertEqual(z3["zuordnung_art"], "neu")
-        self.assertIsNotNone(z3["beste_aehnlichkeit"])
-        self.assertLess(z3["beste_aehnlichkeit"], 0.8)
+        self.assertAlmostEqual(z2["geruecht_aehnlichkeit"], zweite["aehnlichkeit"], places=6)
+        self.assertGreaterEqual(z2["beste_aehnlichkeit"], z2["geruecht_aehnlichkeit"])
+        z4 = zeilen[vierte["meldung_id"]]
+        self.assertEqual(z4["zuordnung_art"], "neu")
+        if z4["geruecht_aehnlichkeit"] is not None:
+            self.assertLess(z4["geruecht_aehnlichkeit"], 0.75)
 
-        status, a = aufruf("GET", "geruechte", query={"status": "all"})
+        status, a = aufruf("GET", "geruechte", query={"status": "all", "limit": 200})
         self.assertEqual(status, 200)
-        eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == erste["geruecht_id"])
+        eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == gid)
         self.assertEqual(eintrag["anzahl_meldungen"], 2)
+
+    def test_zuordnung_nachholen(self):
+        status, a = aufruf("POST", "zuordnung_nachholen", {"anzahl": 1})
+        self.assertEqual(status, 200, a)
+        self.assertEqual(sorted(a), ["bearbeitet", "ergebnisse", "noch_offen"])
+        self.assertLessEqual(a["bearbeitet"], 1)
+        self.assertEqual(a["bearbeitet"], len(a["ergebnisse"]))
+        for e in a["ergebnisse"]:
+            self.assertEqual(sorted(e), ["fehler", "geruecht_id", "meldung_id", "neues_geruecht", "zuordnung"])
+            self.assertIn(e["zuordnung"], ("embedding", "geprueft", "neu", "offen"))
+        self.assertIsInstance(a["noch_offen"], int)
+        # Ohne Body gilt der Standard
+        status, a = aufruf("POST", "zuordnung_nachholen", roh=b"")
+        self.assertEqual(status, 200, a)
+        for body in ({"anzahl": 0}, {"anzahl": 21}, {"anzahl": "3"}, {"x": 1}, [1]):
+            with self.subTest(body=body):
+                self.assertEqual(aufruf("POST", "zuordnung_nachholen", body)[0], 400)
+        self.assertEqual(aufruf("POST", "zuordnung_nachholen", roh=b"{kaputt")[0], 400)
 
     # --- POST klassifizierung_setzen -----------------------------------------
 

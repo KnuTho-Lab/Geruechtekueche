@@ -1,6 +1,6 @@
 # Zuordnungs-Prüfung: Anforderungen an den n8n-Workflow
 
-Stand 2026-09-30. Für Thomas und seinen Claude-Assistenten. Die Backend-Seite baut Knut parallel (Branch `feature/zuordnung-pruefung`), sie ist noch nicht live. Der Workflow kann unabhängig davon gebaut und mit den Testfällen unten geprüft werden.
+Stand 2026-09-30. Für Thomas und seinen Claude-Assistenten. Die Backend-Seite ist gebaut und getestet (Branch `feature/zuordnung-pruefung`: `supabase/functions/_shared/zuordnung_logik.ts` und `zuordnung.ts`, Migration `20260930120000_zuordnung_pruefung.sql`), aber noch nicht live. Der Workflow kann unabhängig davon gebaut und mit den Testfällen unten geprüft werden.
 
 ## 1. Worum es geht
 
