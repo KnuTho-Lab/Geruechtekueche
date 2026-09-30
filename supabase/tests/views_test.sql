@@ -30,8 +30,8 @@ begin
     'http_status,zeitueberschreitung,fehler,request_id,antwort_abgeholt_am',
     format('Fall 1: klassifizierung_protokoll hat %s', spalten);
 
-  select kategorie_id into standort from public.kategorien where name = 'Standort';
-  select kategorie_id into personal from public.kategorien where name = 'Personal';
+  select kategorie_id into standort from public.kategorien where name = 'Standortschließung oder Massenentlassung';
+  select kategorie_id into personal from public.kategorien where name = 'Übernahme oder Verkauf';
 
   -- Fall 2: Anstoss verschickt, noch keine Antwort -> wartet
   delete from vault.secrets where name in ('klassifizierer_webhook_url', 'klassifizierer_webhook_secret');
@@ -77,11 +77,11 @@ begin
     where geruecht_id = g;
   select * into zeile from public.klassifizierung_protokoll where geruecht_id = g;
   assert zeile.ergebnis = 'klassifiziert', format('Fall 5: ergebnis ist %s', zeile.ergebnis);
-  assert zeile.kategorie = 'Standort' and zeile.klassifiziert_am is not null, 'Fall 5: Kategorie oder Zeit fehlt';
+  assert zeile.kategorie = 'Standortschließung oder Massenentlassung' and zeile.klassifiziert_am is not null, 'Fall 5: Kategorie oder Zeit fehlt';
 
   -- Fall 6: Uebersicht mit Namen beider Kategorien und live gezaehlten Meldungen
   select * into zeile from public.geruechte_uebersicht where geruecht_id = g;
-  assert zeile.kategorie = 'Standort' and zeile.zweitkategorie = 'Personal',
+  assert zeile.kategorie = 'Standortschließung oder Massenentlassung' and zeile.zweitkategorie = 'Übernahme oder Verkauf',
     format('Fall 6: Kategorien %s / %s', zeile.kategorie, zeile.zweitkategorie);
   assert zeile.anzahl_meldungen = 2, format('Fall 6: anzahl_meldungen ist %s', zeile.anzahl_meldungen);
 

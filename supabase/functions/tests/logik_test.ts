@@ -38,6 +38,7 @@ import {
   RATE_LIMITS,
   SEITE_MAX,
   SEITE_STANDARD,
+  SONSTIGES,
   sollInDbProtokolliertWerden,
   STANDORT_MAX,
   STATUS_WERTE,
@@ -47,6 +48,7 @@ import {
   validiereMeldung,
   vektorAlsText,
   waehleAdminKey,
+  wendeSonstigesRegelAn,
   ZWEITKATEGORIE_AB,
   zuordnungsProtokoll,
 } from "../_shared/logik.ts";
@@ -345,6 +347,75 @@ Deno.test("klassifizierung: Zweitkategorie ungueltig -> Fehler", () => {
 
 Deno.test("klassifizierung: kein Objekt -> Fehler", () => {
   for (const body of [null, "x", 3, []]) assert(!validiereKlassifizierung(body).ok);
+});
+
+// --- wendeSonstigesRegelAn ---------------------------------------------------
+// Harte Bedingung fuer Sonstiges (Knut, 2026-09-30): Sonstiges gilt nur, wenn keine echte
+// Kategorie mindestens ZWEITKATEGORIE_AB bekommt, und nie als Zweitkategorie.
+
+function klass(teil: Record<string, unknown>) {
+  const e = validiereKlassifizierung({ geruecht_id: 7, kernaussage: "X", ...teil });
+  assert(e.ok, JSON.stringify(e));
+  return e.wert;
+}
+
+Deno.test("sonstiges: der Name ist 'Sonstiges', wie in der Migration", () => {
+  assertEquals(SONSTIGES, "Sonstiges");
+});
+
+Deno.test("sonstiges: echte Kategorie ohne Sonstiges bleibt unveraendert", () => {
+  const k = klass({ kategorie: "Vergütung", konfidenz: 0.8, zweitkategorie: "Qualität und Produkt", zweitkonfidenz: 0.5 });
+  assertEquals(wendeSonstigesRegelAn(k), { wert: k, umgedeutet: [] });
+});
+
+Deno.test("sonstiges: allein oder ohne brauchbare Zweitkategorie bleibt Sonstiges", () => {
+  const allein = klass({ kategorie: "Sonstiges", konfidenz: 0.9 });
+  assertEquals(wendeSonstigesRegelAn(allein), { wert: allein, umgedeutet: [] });
+  const schwach = klass({ kategorie: "Sonstiges", konfidenz: 0.9, zweitkategorie: "Vergütung", zweitkonfidenz: 0.29 });
+  assertEquals(wendeSonstigesRegelAn(schwach), { wert: schwach, umgedeutet: [] });
+});
+
+Deno.test("sonstiges: echte Zweitkategorie ab der Schwelle wird Hauptkategorie", () => {
+  const k = klass({
+    kategorie: "Sonstiges", konfidenz: 0.7, begruendung: "unklar", manuell_pruefen: false,
+    zweitkategorie: "Vergütung", zweitkonfidenz: ZWEITKATEGORIE_AB,
+  });
+  const r = wendeSonstigesRegelAn(k);
+  assertEquals(r.wert, {
+    ...k, kategorie: "Vergütung", konfidenz: ZWEITKATEGORIE_AB, zweitkategorie: null, zweitkonfidenz: null,
+  });
+  assertEquals(r.umgedeutet.length, 1);
+  assert(r.umgedeutet[0].includes("Vergütung"));
+});
+
+Deno.test("sonstiges: manuell_pruefen bleibt wie gesendet", () => {
+  const k = klass({ kategorie: "Sonstiges", konfidenz: 0.7, zweitkategorie: "Vergütung", zweitkonfidenz: 0.6 });
+  assertEquals(wendeSonstigesRegelAn(k).wert.manuell_pruefen, false);
+  const m = klass({ kategorie: "Sonstiges", konfidenz: 0.9, manuell_pruefen: true });
+  assertEquals(wendeSonstigesRegelAn(m).wert.manuell_pruefen, true);
+});
+
+Deno.test("sonstiges: als Zweitkategorie wird es verworfen, die Hauptkategorie bleibt", () => {
+  const k = klass({ kategorie: "Vergütung", konfidenz: 0.8, zweitkategorie: "Sonstiges", zweitkonfidenz: 0.6 });
+  const r = wendeSonstigesRegelAn(k);
+  assertEquals(r.wert, { ...k, zweitkategorie: null, zweitkonfidenz: null });
+  assertEquals(r.umgedeutet.length, 1);
+  assert(r.umgedeutet[0].includes("Zweitkategorie"));
+});
+
+Deno.test("sonstiges: Ergebnis erfuellt weiter die Regeln der Datenbank", () => {
+  const faelle = [
+    klass({ kategorie: "Sonstiges", konfidenz: 0.95, zweitkategorie: "Vergütung", zweitkonfidenz: 0.9 }),
+    klass({ kategorie: "Vergütung", konfidenz: 0.5, zweitkategorie: "Sonstiges", zweitkonfidenz: 0.5 }),
+    klass({ kategorie: "Sonstiges", konfidenz: 0.4, zweitkategorie: "Vergütung", zweitkonfidenz: 0.1 }),
+  ];
+  for (const k of faelle) {
+    const w = wendeSonstigesRegelAn(k).wert;
+    assert(w.zweitkategorie !== SONSTIGES);
+    assert(w.zweitkategorie !== w.kategorie);
+    assertEquals(w.zweitkategorie === null, w.zweitkonfidenz === null);
+    if (w.zweitkonfidenz !== null) assert(w.konfidenz !== null && w.zweitkonfidenz <= w.konfidenz);
+  }
 });
 
 // --- Embedding: Anfrage und Antwort ------------------------------------------
@@ -646,9 +717,10 @@ Deno.test("calls: Antwort von meldung ist die aus dem Meldungsschema, Rate-Limit
 Deno.test("calls: Parameter und Antwort von klassifizierung_setzen sind die gepruefte Eingabe", () => {
   const k = ENDPUNKTE.find((e) => e.name === "klassifizierung_setzen")!;
   assertEquals(k.parameter.map((p) => p.name).sort(), [...KLASSIFIZIERUNG_FELDER].sort());
-  const gueltig = validiereKlassifizierung({ geruecht_id: 1, kategorie: "Personal", kernaussage: "x" });
+  const gueltig = validiereKlassifizierung({ geruecht_id: 1, kategorie: "Vergütung", kernaussage: "x" });
   assert(gueltig.ok);
-  assertEquals(Object.keys(k.antwort).sort(), Object.keys(gueltig.wert).sort());
+  const r = wendeSonstigesRegelAn(gueltig.wert);
+  assertEquals(Object.keys(k.antwort).sort(), Object.keys({ ...r.wert, umgedeutet: r.umgedeutet }).sort());
 });
 
 Deno.test("calls: Antwort von geruechte beschreibt genau Seite und Listeneintrag", () => {

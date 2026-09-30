@@ -26,8 +26,8 @@ begin
     null;
   end;
 
-  select kategorie_id into standort from public.kategorien where name = 'Standort';
-  select kategorie_id into personal from public.kategorien where name = 'Personal';
+  select kategorie_id into standort from public.kategorien where name = 'Standortschließung oder Massenentlassung';
+  select kategorie_id into personal from public.kategorien where name = 'Übernahme oder Verkauf';
 
   -- Fall 2: gueltige Top-2 wird gespeichert, auch mit gleicher Konfidenz
   insert into public.geruechte default values returning geruecht_id into g;

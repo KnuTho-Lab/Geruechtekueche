@@ -283,6 +283,43 @@ export function validiereKlassifizierung(body: unknown): Ergebnis<Klassifizierun
   });
 }
 
+// --- Sonstiges-Regel ----------------------------------------------------------
+
+// Auffangkategorie fuer Geruechte, die zu keiner anderen passen. Der Name muss exakt dem in
+// der Migration 20260930080000_neue_kategorien entsprechen (der SQL-Test prueft ihn dort).
+export const SONSTIGES = "Sonstiges";
+
+// Harte Bedingung, damit Sonstiges nicht zum Abladeplatz fuer uneindeutige Faelle wird
+// (Knut, 2026-09-30). Das Backend deutet um statt abzulehnen, weil ein 400 das Geruecht
+// unklassifiziert liegen liesse (der Klassifizierer versucht es nicht erneut):
+//  1. Sonstiges als Hauptkategorie gilt nur, wenn keine echte Kategorie mindestens
+//     ZWEITKATEGORIE_AB bekommt. Sonst wird die Zweitkategorie samt Konfidenz zur Haupt-
+//     kategorie, eine Zweitkategorie bleibt nicht (Sonstiges waere dort bedeutungslos).
+//  2. Sonstiges als Zweitkategorie wird verworfen, "passt auch zu nichts" traegt nichts.
+// manuell_pruefen bleibt wie gesendet (Knut). Jede Umdeutung steht in 'umgedeutet'.
+export function wendeSonstigesRegelAn(
+  k: KlassifizierungEingabe,
+): { wert: KlassifizierungEingabe; umgedeutet: string[] } {
+  if (k.zweitkategorie === SONSTIGES) {
+    return {
+      wert: { ...k, zweitkategorie: null, zweitkonfidenz: null },
+      umgedeutet: [`Zweitkategorie '${SONSTIGES}' verworfen, sie ist nur als alleinige Kategorie erlaubt`],
+    };
+  }
+  if (
+    k.kategorie === SONSTIGES && k.zweitkategorie !== null && k.zweitkonfidenz !== null &&
+    k.zweitkonfidenz >= ZWEITKATEGORIE_AB
+  ) {
+    return {
+      wert: { ...k, kategorie: k.zweitkategorie, konfidenz: k.zweitkonfidenz, zweitkategorie: null, zweitkonfidenz: null },
+      umgedeutet: [
+        `'${SONSTIGES}' durch '${k.zweitkategorie}' ersetzt, weil sie mindestens ${ZWEITKATEGORIE_AB} erreicht`,
+      ],
+    };
+  }
+  return { wert: k, umgedeutet: [] };
+}
+
 // --- Embedding und Zuordnung -------------------------------------------------
 
 export const EMBEDDING_MODELL = "google/gemini-embedding-001";
@@ -833,12 +870,14 @@ export const ENDPUNKTE: Endpunkt[] = [
     beschreibung: "Alle Kategorien, die der Klassifizierungs-Workflow vergeben kann, je mit einer " +
       "Beschreibung, was sie umfasst und wogegen sie sich abgrenzt.",
     wann_nutzen: "Für den Klassifizierer vor jeder Klassifizierung (Namen plus Abgrenzung in den Prompt). " +
-      "Für den Intake-Agenten nur, wenn er erklären will, welche Themen es gibt: die Kategorie vergibt der Klassifizierer.",
+      "Für den Intake-Agenten nur, wenn er erklären will, welche Themen es gibt: die Kategorie vergibt der Klassifizierer. " +
+      `'${SONSTIGES}' ist das Auffangbecken, die harte Bedingung dafür steht bei POST klassifizierung_setzen.`,
     parameter: [],
     beispiel_aufruf: null,
     erfolg: 200,
     antwort: {
-      kategorien: "Liste der Kategorien in fester Reihenfolge",
+      kategorien: "Liste aller Kategorien, sortiert nach kategorie_id. Die Reihenfolge ist kein Rang: " +
+        "Haupt- und Zweitkategorie entscheidet allein die Konfidenz",
       "kategorien[].name": "Name, so an POST klassifizierung_setzen schicken",
       "kategorien[].beschreibung": "was die Kategorie umfasst und wogegen sie sich abgrenzt",
     },
@@ -1003,9 +1042,10 @@ export const ENDPUNKTE: Endpunkt[] = [
         pflicht: true,
         typ: "string",
         beschreibung: "Name aus GET kategorien",
-        grenzen: "muss in GET kategorien stehen",
+        grenzen: `muss in GET kategorien stehen. '${SONSTIGES}' nur, wenn keine andere Kategorie mindestens ` +
+          `${ZWEITKATEGORIE_AB} erreicht, sonst ersetzt das Backend sie durch die zweitkategorie`,
         werte: null,
-        beispiel: "Standort",
+        beispiel: "Standortschließung oder Massenentlassung",
       },
       {
         name: "kernaussage",
@@ -1035,7 +1075,7 @@ export const ENDPUNKTE: Endpunkt[] = [
         beschreibung: "kurze Begründung, wird mitprotokolliert",
         grenzen: `höchstens ${BEGRUENDUNG_MAX} Zeichen`,
         werte: null,
-        beispiel: "Nennt einen Standort und dessen Schließung.",
+        beispiel: "Nennt ein Werk und dessen Schließung.",
       },
       {
         name: "manuell_pruefen",
@@ -1054,9 +1094,10 @@ export const ENDPUNKTE: Endpunkt[] = [
         typ: "string",
         beschreibung: "Zweitbeste Kategorie, Name aus GET kategorien. Immer mitschicken, ob das Gerücht als " +
           "uneindeutig gilt, entscheidet das Backend an der zweitkonfidenz.",
-        grenzen: "muss in GET kategorien stehen und sich von kategorie unterscheiden, nur zusammen mit zweitkonfidenz",
+        grenzen: "muss in GET kategorien stehen und sich von kategorie unterscheiden, nur zusammen mit zweitkonfidenz. " +
+          `'${SONSTIGES}' wird hier verworfen`,
         werte: null,
-        beispiel: "Personal",
+        beispiel: "Übernahme oder Verkauf",
       },
       {
         name: "zweitkonfidenz",
@@ -1072,25 +1113,27 @@ export const ENDPUNKTE: Endpunkt[] = [
     beispiel_aufruf: {
       body: {
         geruecht_id: 7,
-        kategorie: "Standort",
+        kategorie: "Standortschließung oder Massenentlassung",
         kernaussage: "Werk B soll nächstes Jahr geschlossen werden.",
         konfidenz: 0.9,
-        begruendung: "Nennt einen Standort und dessen Schließung.",
+        begruendung: "Nennt ein Werk und dessen Schließung.",
         manuell_pruefen: false,
-        zweitkategorie: "Personal",
+        zweitkategorie: "Übernahme oder Verkauf",
         zweitkonfidenz: 0.4,
       },
     },
     erfolg: 200,
     antwort: {
       geruecht_id: "wie gesendet",
-      kategorie: "wie gesendet, getrimmt",
+      kategorie: "wie gespeichert: wie gesendet, getrimmt, außer die Sonstiges-Regel hat umgedeutet",
       kernaussage: "wie gesendet, getrimmt",
-      konfidenz: "wie gesendet, sonst null",
+      konfidenz: "wie gespeichert, sonst null",
       begruendung: "wie gesendet, sonst null",
       manuell_pruefen: "wie gesendet, sonst false",
-      zweitkategorie: "wie gesendet, getrimmt, sonst null",
-      zweitkonfidenz: "wie gesendet, sonst null",
+      zweitkategorie: "wie gespeichert, sonst null",
+      zweitkonfidenz: "wie gespeichert, sonst null",
+      umgedeutet: `Liste der Eingriffe der Sonstiges-Regel, leer wenn keiner (Regel: '${SONSTIGES}' nur ` +
+        "ohne Zweitkategorie ab der Schwelle, nie als Zweitkategorie)",
     },
     fehler: {
       "400": "Body ungültig oder Kategorie bzw. Zweitkategorie unbekannt (dann mit 'gueltige_kategorien')",
