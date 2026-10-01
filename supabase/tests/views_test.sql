@@ -21,7 +21,8 @@ begin
   select string_agg(column_name, ',' order by ordinal_position) into spalten
     from information_schema.columns where table_schema = 'public' and table_name = 'geruechte_uebersicht';
   assert spalten = 'geruecht_id,status,kernaussage,kategorie_id,kategorie,kategorie_konfidenz,'
-    'zweitkategorie_id,zweitkategorie,zweitkategorie_konfidenz,kategorie_begruendung,manuell_pruefen,'
+    'zweitkategorie_id,zweitkategorie,zweitkategorie_konfidenz,risiko,risiko_status,risiko_berechnet_am,'
+    'risiko_modell,kategorie_begruendung,manuell_pruefen,'
     'anzahl_meldungen,angelegt_am,klassifiziert_am',
     format('Fall 1: geruechte_uebersicht hat %s', spalten);
   select string_agg(column_name, ',' order by ordinal_position) into spalten

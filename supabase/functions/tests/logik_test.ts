@@ -49,6 +49,7 @@ import {
   wendeSonstigesRegelAn,
   ZWEITKATEGORIE_AB,
 } from "../_shared/logik.ts";
+import { parseRisikoNachholAnzahl, RISIKO_STATUS_WERTE } from "../_shared/risiko_logik.ts";
 import { baueMeldungAntwort, parseNachholAnzahl } from "../_shared/zuordnung_logik.ts";
 
 // --- parseStatusFilter -------------------------------------------------------
@@ -252,6 +253,7 @@ Deno.test("klassifizierung: Minimalfall, Texte getrimmt, Protokollfelder mit Sta
         manuell_pruefen: false,
         zweitkategorie: null,
         zweitkonfidenz: null,
+        risiko: null,
       },
     },
   );
@@ -595,6 +597,7 @@ const VALIDATOREN: Record<string, (b: unknown) => { ok: boolean }> = {
   klassifizierung_setzen: validiereKlassifizierung,
   abweisung: validiereAbweisung,
   zuordnung_nachholen: parseNachholAnzahl,
+  risiko_nachholen: parseRisikoNachholAnzahl,
 };
 
 Deno.test("calls: jeder POST-Endpunkt hat einen Validator fuer seine Beispiele", () => {
@@ -664,7 +667,7 @@ Deno.test("calls: Parameter von meldung sind genau die Felder des Meldungsschema
 
 Deno.test("calls: der Pruef-Workflow steht unter den ausgehenden Aufrufen", () => {
   const namen = AUSGEHENDE_AUFRUFE.map((a) => a.name);
-  assertEquals(namen, ["klassifizierung_anstossen", "zuordnung_pruefen"]);
+  assertEquals(namen, ["klassifizierung_anstossen", "zuordnung_pruefen", "risikomodell"]);
 });
 
 Deno.test("calls: Antwort von meldung ist die aus dem Meldungsschema, Rate-Limit dokumentiert", () => {
@@ -679,7 +682,10 @@ Deno.test("calls: Parameter und Antwort von klassifizierung_setzen sind die gepr
   const gueltig = validiereKlassifizierung({ geruecht_id: 1, kategorie: "Vergütung", kernaussage: "x" });
   assert(gueltig.ok);
   const r = wendeSonstigesRegelAn(gueltig.wert);
-  assertEquals(Object.keys(k.antwort).sort(), Object.keys({ ...r.wert, umgedeutet: r.umgedeutet }).sort());
+  assertEquals(
+    Object.keys(k.antwort).sort(),
+    Object.keys({ ...r.wert, risiko_status: "queue", umgedeutet: r.umgedeutet }).sort(),
+  );
 });
 
 Deno.test("calls: Antwort von geruechte beschreibt genau Seite und Listeneintrag", () => {
@@ -939,3 +945,65 @@ Deno.test("protokoll: abgelehnte Aufrufe (401, 405) nicht in die Datenbank, alle
   for (const s of [200, 201, 400, 404, 409, 429, 500]) assertEquals(sollInDbProtokolliertWerden(s), true, String(s));
 });
 
+
+// --- Risiko in klassifizierung_setzen -----------------------------------------
+
+Deno.test("klassifizierung: risiko ist optional, 0 und 1 sind erlaubt, null gilt als nicht geliefert", () => {
+  const basis = { geruecht_id: 7, kategorie: "Organisation", kernaussage: "X" };
+  const ohne = validiereKlassifizierung(basis);
+  assert(ohne.ok);
+  assertEquals(ohne.wert.risiko, null);
+  const mit = validiereKlassifizierung({ ...basis, risiko: 0.62 });
+  assert(mit.ok);
+  assertEquals(mit.wert.risiko, 0.62);
+  assert(validiereKlassifizierung({ ...basis, risiko: 0 }).ok);
+  assert(validiereKlassifizierung({ ...basis, risiko: 1 }).ok);
+  const leer = validiereKlassifizierung({ ...basis, risiko: null });
+  assert(leer.ok);
+  assertEquals(leer.wert.risiko, null);
+});
+
+Deno.test("klassifizierung: risiko ausserhalb 0 bis 1 oder kein Zahlwert -> Fehler", () => {
+  const basis = { geruecht_id: 7, kategorie: "Organisation", kernaussage: "X" };
+  for (const schlecht of [1.01, -0.01, "0.5", true, NaN]) {
+    const e = validiereKlassifizierung({ ...basis, risiko: schlecht });
+    assert(!e.ok, String(schlecht));
+    assert(e.fehler.some((f) => f.includes("risiko")), String(schlecht));
+  }
+});
+
+Deno.test("klassifizierung: die Sonstiges-Regel laesst das Risiko unberuehrt", () => {
+  const g = validiereKlassifizierung({
+    geruecht_id: 1, kategorie: SONSTIGES, kernaussage: "x", konfidenz: 0.5,
+    zweitkategorie: "Vergütung", zweitkonfidenz: 0.4, risiko: 0.33,
+  });
+  assert(g.ok);
+  assertEquals(wendeSonstigesRegelAn(g.wert).wert.risiko, 0.33);
+});
+
+Deno.test("calls: risiko steht als Parameter im Katalog und sagt, was bei Ausfall zu tun ist", () => {
+  const k = ENDPUNKTE.find((e) => e.name === "klassifizierung_setzen")!;
+  const p = k.parameter.find((p) => p.name === "risiko")!;
+  assertEquals(p.pflicht, false);
+  assertEquals(p.typ, "number");
+  assert(p.beschreibung.includes("WEGLASSEN"));
+  assert(p.beschreibung.includes("risiko_nachholen"));
+  assert(p.beschreibung.includes("lokal"));
+  assert(k.antwort.risiko_status.includes(RISIKO_STATUS_WERTE.join(", ")));
+});
+
+Deno.test("calls: das Risikomodell steht unter den ausgehenden Aufrufen und nennt Ausfall und Queue", () => {
+  const a = AUSGEHENDE_AUFRUFE.find((x) => x.name === "risikomodell")!;
+  assert(a.hinweis.includes("LOKAL"));
+  assert(a.hinweis.includes("queue"));
+  assert(a.hinweis.includes("risiko_nachholen"));
+  assert(a.ziel.includes("/risiko"));
+  assert(!JSON.stringify(a).match(/[A-Za-z0-9_-]{30,}/), "kein Token im Katalog");
+});
+
+Deno.test("calls: risiko_nachholen ist ein POST und beschreibt die Fehler 502 und 503", () => {
+  const e = ENDPUNKTE.find((x) => x.name === "risiko_nachholen")!;
+  assertEquals(e.methode, "POST");
+  assert("502" in e.fehler && "503" in e.fehler);
+  assert(e.wann_nutzen.includes("Knut"));
+});

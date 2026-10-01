@@ -114,7 +114,7 @@ class EndpunkteTest(unittest.TestCase):
         for name, methode in [("calls", "GET"), ("kategorien", "GET"), ("geruechte", "GET"),
                               ("status", "GET"), ("meldungsschema", "GET"), ("meldung", "POST"),
                               ("klassifizierung_setzen", "POST"), ("abweisung", "POST"),
-                              ("zuordnung_nachholen", "POST")]:
+                              ("zuordnung_nachholen", "POST"), ("risiko_nachholen", "POST")]:
             with self.subTest(name=name):
                 self.assertEqual(aufruf(methode, name, key=None)[0], 401)
                 self.assertEqual(aufruf(methode, name, key="falsch")[0], 401)
@@ -130,9 +130,9 @@ class EndpunkteTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(sorted(e["name"] for e in a["endpunkte"]),
                          ["abweisung", "calls", "geruechte", "kategorien", "klassifizierung_setzen",
-                          "meldung", "meldungsschema", "status", "zuordnung_nachholen"])
+                          "meldung", "meldungsschema", "risiko_nachholen", "status", "zuordnung_nachholen"])
         self.assertEqual([x["name"] for x in a["ausgehende_aufrufe"]],
-                         ["klassifizierung_anstossen", "zuordnung_pruefen"])
+                         ["klassifizierung_anstossen", "zuordnung_pruefen", "risikomodell"])
         self.assertEqual(sorted(a["allgemeine_fehler"]), ["401", "405", "500"])
         self.assertEqual(sorted(a), ["ablauf_fuer_agenten", "allgemeine_fehler", "ausgehende_aufrufe",
                                      "authentifizierung", "basis_url", "endpunkte", "protokollierung"])
@@ -437,6 +437,47 @@ class EndpunkteTest(unittest.TestCase):
         status, a = aufruf("GET", "geruechte", query={"status": "all"})
         eintrag = next(g for g in a["geruechte"] if g["geruecht_id"] == gid)
         self.assertEqual(eintrag["kategorie"], "Annehmlichkeiten und Arbeitsumfeld")
+
+    # --- Risiko --------------------------------------------------------------
+
+    def test_klassifizierung_setzen_mit_risiko_ist_berechnet(self):
+        antwort = self.neue_meldung(text="Die Kaffeemaschine im Flur 2 bekommt ein Update auf Milchschaum")
+        self.assertTrue(antwort["neues_geruecht"], antwort)
+        gid = antwort["geruecht_id"]
+        status, a = aufruf("POST", "klassifizierung_setzen", {
+            "geruecht_id": gid, "kategorie": "Annehmlichkeiten und Arbeitsumfeld",
+            "kernaussage": "[TEST] Die Kaffeemaschine soll ersetzt werden.", "risiko": 0.62})
+        self.assertEqual(status, 200, a)
+        self.assertEqual((a["risiko"], a["risiko_status"]), (0.62, "berechnet"))
+        z = sql(f"select risiko, risiko_status, risiko_modell, risiko_berechnet_am is not null as zeit "
+                f"from geruechte where geruecht_id = {int(gid)};")[0]
+        self.assertEqual((float(z["risiko"]), z["risiko_status"], z["risiko_modell"], z["zeit"]),
+                         (0.62, "berechnet", "gbert-large-v2", True))
+
+    def test_klassifizierung_setzen_ohne_risiko_kommt_in_die_queue(self):
+        antwort = self.neue_meldung(text="Die Parkplatzschranke am Nordtor wird auf Kennzeichenerkennung umgebaut")
+        self.assertTrue(antwort["neues_geruecht"], antwort)
+        gid = antwort["geruecht_id"]
+        status, a = aufruf("POST", "klassifizierung_setzen", {
+            "geruecht_id": gid, "kategorie": "Annehmlichkeiten und Arbeitsumfeld",
+            "kernaussage": "[TEST] Die Schranke soll umgebaut werden."})
+        self.assertEqual(status, 200, a)
+        self.assertEqual((a["risiko"], a["risiko_status"]), (None, "queue"))
+        z = sql(f"select risiko, risiko_status, risiko_modell from geruechte where geruecht_id = {int(gid)};")[0]
+        self.assertEqual((z["risiko"], z["risiko_status"], z["risiko_modell"]), (None, "queue", None))
+
+    def test_klassifizierung_setzen_risiko_ausserhalb_0_bis_1_400(self):
+        status, a = aufruf("POST", "klassifizierung_setzen", {
+            "geruecht_id": 1, "kategorie": "Vergütung", "kernaussage": "x", "risiko": 1.5})
+        self.assertEqual(status, 400, a)
+        self.assertTrue(any("risiko" in f for f in a["fehler"]), a)
+
+    def test_risiko_nachholen_ungueltiger_body_400(self):
+        # Nur Eingabefehler: ein echter Lauf wuerde die Queue mit echten Gerueechten bearbeiten
+        for body in ({"anzahl": 0}, {"anzahl": 51}, {"anzahl": "5"}, {"x": 1}):
+            with self.subTest(body=body):
+                self.assertEqual(aufruf("POST", "risiko_nachholen", body)[0], 400)
+        self.assertEqual(aufruf("POST", "risiko_nachholen", roh="kaputt")[0], 400)
 
     def test_klassifizierung_setzen_sonstiges(self):
         # Harte Bedingung (Knut, 2026-09-30): Sonstiges nur ohne echte Kategorie ab 0.3,
