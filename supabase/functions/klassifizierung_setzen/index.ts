@@ -1,9 +1,12 @@
 // POST /klassifizierung_setzen: der Klassifizierungs-Workflow schreibt Kategorie und
 // Kernaussage eines Geruechts zurueck. Nur einmal: ein bereits klassifiziertes
-// Geruecht wird nicht ueberschrieben (409).
+// Geruecht wird nicht ueberschrieben (409). Das Risiko (Risikomodell, laeuft lokal) ist optional:
+// fehlt es, weil das Modell nicht geantwortet hat, steht das Geruecht in der Queue und wird mit
+// POST /risiko_nachholen nachgeliefert, die Klassifizierung geht trotzdem durch.
 import { db } from "../_shared/db.ts";
 import { endpunkt, json } from "../_shared/http.ts";
 import { validiereKlassifizierung, wendeSonstigesRegelAn } from "../_shared/logik.ts";
+import { RISIKO_MODELL, risikoStatusFuer } from "../_shared/risiko_logik.ts";
 
 Deno.serve(endpunkt("POST", async (req) => {
   let body: unknown;
@@ -33,6 +36,8 @@ Deno.serve(endpunkt("POST", async (req) => {
     });
   }
 
+  const risikoStatus = risikoStatusFuer(k.risiko);
+
   // Bedingtes Update in einem Schritt: greift nur, solange noch keine Kategorie gesetzt ist
   const upd = await db()
     .from("geruechte")
@@ -44,6 +49,10 @@ Deno.serve(endpunkt("POST", async (req) => {
       manuell_pruefen: k.manuell_pruefen,
       zweitkategorie_id: k.zweitkategorie === null ? null : idVon.get(k.zweitkategorie),
       zweitkategorie_konfidenz: k.zweitkonfidenz,
+      risiko: k.risiko,
+      risiko_status: risikoStatus,
+      risiko_berechnet_am: k.risiko === null ? null : new Date().toISOString(),
+      risiko_modell: k.risiko === null ? null : RISIKO_MODELL,
     })
     .eq("geruecht_id", k.geruecht_id)
     .is("kategorie_id", null)
@@ -57,5 +66,5 @@ Deno.serve(endpunkt("POST", async (req) => {
     return json(409, { fehler: [`Gerücht ${k.geruecht_id} ist bereits klassifiziert`] });
   }
 
-  return json(200, { ...k, umgedeutet });
+  return json(200, { ...k, risiko_status: risikoStatus, umgedeutet });
 }));

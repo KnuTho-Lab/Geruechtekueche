@@ -8,6 +8,7 @@ import {
   ZUORDNUNG_SICHER_AB,
   ZUORDNUNG_ZEITLIMIT_MS,
 } from "./zuordnung_logik.ts";
+import { RISIKO_NACHHOLEN_MAX, RISIKO_STATUS_WERTE } from "./risiko_logik.ts";
 
 export const STATUS_WERTE = ["offen", "bestätigt", "widerlegt", "nicht prüfbar"] as const;
 export type Status = typeof STATUS_WERTE[number];
@@ -198,11 +199,13 @@ export interface KlassifizierungEingabe {
   manuell_pruefen: boolean;
   zweitkategorie: string | null;
   zweitkonfidenz: number | null;
+  // Risikowert des Risikomodells, null = Modell hat nicht geantwortet (dann risiko_status 'queue')
+  risiko: number | null;
 }
 
 export const KLASSIFIZIERUNG_FELDER = [
   "geruecht_id", "kategorie", "kernaussage", "konfidenz", "begruendung", "manuell_pruefen",
-  "zweitkategorie", "zweitkonfidenz",
+  "zweitkategorie", "zweitkonfidenz", "risiko",
 ];
 
 // Ab dieser Zweitkonfidenz gilt ein Geruecht als uneindeutig, GET /geruechte zeigt dann
@@ -284,10 +287,12 @@ export function validiereKlassifizierung(body: unknown): Ergebnis<Klassifizierun
     else if (zweitkonfidenz > konfidenz) probleme.push("'zweitkonfidenz' darf nicht größer als 'konfidenz' sein");
   }
 
+  const risiko = konfidenzOderNull(b.risiko, "risiko", probleme);
+
   if (probleme.length > 0 || !id.ok) return { ok: false, fehler: probleme };
   return ok({
     geruecht_id: id.wert, kategorie, kernaussage, konfidenz, begruendung, manuell_pruefen: manuellPruefen,
-    zweitkategorie, zweitkonfidenz,
+    zweitkategorie, zweitkonfidenz, risiko,
   });
 }
 
@@ -798,6 +803,22 @@ export const AUSGEHENDE_AUFRUFE = [
       "Antwort: die Meldung bleibt offen und wird nachgeholt, es entsteht kein neues Gerücht. Jede Prüfung steht in " +
       "der Tabelle zuordnung_pruefungen, offene Meldungen zeigt die View offene_zuordnungen. Vertrag: docs/zuordnung-pruefung.md.",
   },
+  {
+    name: "risikomodell",
+    ausloeser: "Thomas' Klassifizierungs-Workflow (n8n) für jedes neue Gerücht, mit dem Text der ersten Meldung; " +
+      "dasselbe Modell ruft das Backend selbst bei POST risiko_nachholen auf",
+    ziel: "https://desktop-4d4tfa1.taildd5fa7.ts.net/risiko (Docker-Container 'geruechte-risiko' auf Knuts Rechner, " +
+      "über Tailscale Funnel; im Backend die Secrets RISIKO_URL und RISIKO_TOKEN)",
+    methode: "POST",
+    header: { Authorization: "Bearer <Token>, das Token gibt Knut Thomas, in n8n als Credential ablegen" },
+    body: { texte: "1 bis 50 Texte, je höchstens 2000 Zeichen, hier genau eins: der Text der ersten Meldung" },
+    antwort: { risiko: "Liste mit einem Wert 0 bis 1 je Text, gleiche Reihenfolge (0 = harmlos, 1 = dringend)" },
+    hinweis: "Das Modell läuft LOKAL auf Knuts Rechner. Antwortet es nicht (Verbindungsfehler, Zeitüberschreitung, " +
+      "HTTP 5xx), ist vermutlich der Rechner oder der Docker-Container aus: dann bei POST klassifizierung_setzen " +
+      "risiko weglassen. Das Gerücht bekommt risiko_status 'queue' und wird nachgeliefert, wenn Knut POST " +
+      "risiko_nachholen anstößt. 401 = Token falsch, 429 = Modell ausgelastet (höchstens 2 Anfragen gleichzeitig), " +
+      "413 = Body über 512 KB. Empfohlen ist ein Zeitlimit von etwa 30 s. Vertrag: docs/risikomodell.md.",
+  },
 ];
 
 // Transparenz fuer die Aufrufer: was die API ueber jeden Aufruf festhaelt
@@ -1038,7 +1059,7 @@ export const ENDPUNKTE: Endpunkt[] = [
   ep({
     name: "klassifizierung_setzen",
     methode: "POST",
-    beschreibung: "Setzt Kategorie, Zweitkategorie (Top-2) und Kernaussage eines Gerüchts. Nur einmal möglich.",
+    beschreibung: "Setzt Kategorie, Zweitkategorie (Top-2), Kernaussage und Risiko eines Gerüchts. Nur einmal möglich.",
     wann_nutzen: "Nur für den n8n-Klassifizierer nach dem Trigger-Aufruf, nicht für den Intake-Agenten.",
     parameter: [
       {
@@ -1124,6 +1145,21 @@ export const ENDPUNKTE: Endpunkt[] = [
         werte: null,
         beispiel: 0.4,
       },
+      {
+        name: "risiko",
+        ort: "body",
+        pflicht: false,
+        typ: "number",
+        beschreibung: "Risikowert des Risikomodells (0 = harmlos, 1 = dringend) für den Text der ersten Meldung. " +
+          "Das Modell läuft lokal auf Knuts Rechner (siehe ausgehende_aufrufe, Eintrag risikomodell). " +
+          "Antwortet es nicht (Zeitüberschreitung, Verbindungsfehler, HTTP-Fehler), ist vermutlich der Rechner oder " +
+          "der Docker-Container aus: dann risiko WEGLASSEN und trotzdem klassifizieren. Das Gerücht bekommt " +
+          "risiko_status 'queue' und wird nachgeliefert, wenn Knut POST risiko_nachholen anstößt. Nicht wiederholen " +
+          "oder warten, ein Ausfall darf die Klassifizierung nie blockieren.",
+        grenzen: "0 bis 1, weglassen oder null = Modell hat nicht geantwortet",
+        werte: null,
+        beispiel: 0.62,
+      },
     ],
     beispiel_aufruf: {
       body: {
@@ -1135,6 +1171,7 @@ export const ENDPUNKTE: Endpunkt[] = [
         manuell_pruefen: false,
         zweitkategorie: "Übernahme oder Verkauf",
         zweitkonfidenz: 0.4,
+        risiko: 0.62,
       },
     },
     erfolg: 200,
@@ -1147,6 +1184,9 @@ export const ENDPUNKTE: Endpunkt[] = [
       manuell_pruefen: "wie gesendet, sonst false",
       zweitkategorie: "wie gespeichert, sonst null",
       zweitkonfidenz: "wie gespeichert, sonst null",
+      risiko: "wie gespeichert, sonst null (Modell hat nicht geantwortet)",
+      risiko_status: `${RISIKO_STATUS_WERTE.join(", ")}: hier 'berechnet' mit risiko, sonst 'queue' (wird mit ` +
+        "POST risiko_nachholen nachgeliefert)",
       umgedeutet: `Liste der Eingriffe der Sonstiges-Regel, leer wenn keiner (Regel: '${SONSTIGES}' nur ` +
         "ohne Zweitkategorie ab der Schwelle, nie als Zweitkategorie)",
     },
@@ -1154,6 +1194,42 @@ export const ENDPUNKTE: Endpunkt[] = [
       "400": "Body ungültig oder Kategorie bzw. Zweitkategorie unbekannt (dann mit 'gueltige_kategorien')",
       "404": "Gerücht existiert nicht",
       "409": "Gerücht ist bereits klassifiziert",
+    },
+  }),
+  ep({
+    name: "risiko_nachholen",
+    methode: "POST",
+    beschreibung: "Liefert das Risiko für klassifizierte Gerüchte nach, deren Modell-Aufruf nicht geklappt hat " +
+      "(risiko_status 'queue'). Älteste zuerst, ein einziger Aufruf des Risikomodells für alle.",
+    wann_nutzen: "Nur auf Knuts Anstoß, nachdem sein Rechner und der Docker-Container wieder laufen. Nicht für den " +
+      "Intake-Agenten und nicht für den Klassifizierungs-Workflow.",
+    parameter: [
+      {
+        name: "anzahl",
+        ort: "body",
+        pflicht: false,
+        typ: "integer",
+        beschreibung: "So viele Gerüchte aus der Queue höchstens nachliefern. Ohne Body die Standardanzahl.",
+        grenzen: `1 bis ${RISIKO_NACHHOLEN_MAX}`,
+        werte: null,
+        beispiel: 20,
+      },
+    ],
+    beispiel_aufruf: { body: { anzahl: 20 } },
+    erfolg: 200,
+    antwort: {
+      bearbeitet: "Gerüchte, deren Risiko jetzt gesetzt ist",
+      ergebnisse: "ein Eintrag je versuchtem Gerücht",
+      "ergebnisse[].geruecht_id": "ID des Gerüchts",
+      "ergebnisse[].risiko": "gesetzter Wert 0 bis 1, null wenn nicht gesetzt",
+      "ergebnisse[].fehler": "Grund, warum es in der Queue blieb, sonst null",
+      noch_in_queue: "Gerüchte in der Queue nach diesem Aufruf",
+    },
+    fehler: {
+      "400": "Body ungültig oder anzahl außerhalb der Grenzen",
+      "502": "Risikomodell hat nicht geantwortet (Rechner oder Container aus, Zeitlimit, Token abgelehnt): " +
+        "alle bleiben in der Queue, die Antwort nennt 'noch_in_queue'",
+      "503": "Das Backend ist nicht konfiguriert (Secrets RISIKO_URL und RISIKO_TOKEN fehlen)",
     },
   }),
 ];
