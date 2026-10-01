@@ -443,6 +443,9 @@ verify_jwt = false
 [functions.zuordnung_nachholen]
 verify_jwt = false
 
+[functions.risiko_nachholen]
+verify_jwt = false
+
 [functions.agent-chat]
 # Login-Token prueft die Function selbst, damit der CORS-Preflight ohne Token durchkommt.
 verify_jwt = false

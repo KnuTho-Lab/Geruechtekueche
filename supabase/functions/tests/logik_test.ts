@@ -1007,3 +1007,17 @@ Deno.test("calls: risiko_nachholen ist ein POST und beschreibt die Fehler 502 un
   assert("502" in e.fehler && "503" in e.fehler);
   assert(e.wann_nutzen.includes("Knut"));
 });
+
+// Eine neue Function ohne verify_jwt = false wuerde Aufrufe mit x-api-key mit 401
+// UNAUTHORIZED_NO_AUTH_HEADER abweisen, bevor der eigene Schluessel geprueft wird
+// (so passiert bei risiko_nachholen am 2026-10-01).
+Deno.test("config: jede Function steht in config.toml mit verify_jwt = false", async () => {
+  const zeilen = (await Deno.readTextFile(new URL("../../config.toml", import.meta.url))).split(/\r?\n/);
+  for await (const e of Deno.readDir(new URL("..", import.meta.url))) {
+    if (!e.isDirectory || e.name.startsWith("_") || e.name === "tests") continue;
+    const abschnitt = zeilen.findIndex((z) => z.trim() === `[functions.${e.name}]`);
+    assert(abschnitt >= 0, `${e.name}: Abschnitt fehlt in config.toml`);
+    const jwt = zeilen.slice(abschnitt + 1).find((z) => z.trim().startsWith("verify_jwt"));
+    assertEquals(jwt?.replace(/\s/g, ""), "verify_jwt=false", e.name);
+  }
+});
