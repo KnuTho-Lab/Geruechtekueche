@@ -15,7 +15,7 @@
       "typeVersion": 2,
       "position": [
         -1840,
-        -368
+        -464
       ],
       "webhookId": "44a65c19-3b1e-4f90-b11b-8adfbfdf1b1a",
       "credentials": {
@@ -36,8 +36,8 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        -1632,
-        -368
+        -1616,
+        -464
       ]
     },
     {
@@ -52,8 +52,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -1408,
-        -368
+        -1392,
+        -336
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -71,8 +71,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -1184,
-        -368
+        -1168,
+        -336
       ]
     },
     {
@@ -86,8 +86,8 @@
       "type": "@n8n/n8n-nodes-langchain.chainLlm",
       "typeVersion": 1.5,
       "position": [
-        -960,
-        -368
+        -944,
+        -336
       ]
     },
     {
@@ -101,8 +101,8 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
       "position": [
-        -992,
-        -144
+        -936,
+        -120
       ],
       "credentials": {
         "googlePalmApi": {
@@ -121,8 +121,8 @@
       "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
       "typeVersion": 1.2,
       "position": [
-        -832,
-        -144
+        -808,
+        -120
       ]
     },
     {
@@ -134,8 +134,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -608,
-        -368
+        -592,
+        -336
       ]
     },
     {
@@ -168,8 +168,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        -384,
-        -368
+        80,
+        -464
       ]
     },
     {
@@ -180,7 +180,7 @@
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ geruecht_id: $json.geruecht_id, kategorie: $json.kategorie, kernaussage: $json.kernaussage, konfidenz: $json.konfidenz, begruendung: $json.begruendung, manuell_pruefen: $json.manuell_pruefen, zweitkategorie: $json.zweitkategorie, zweitkonfidenz: $json.zweitkonfidenz }) }}",
+        "jsonBody": "={{ JSON.stringify(Object.assign({ geruecht_id: $json.geruecht_id, kategorie: $json.kategorie, kernaussage: $json.kernaussage, konfidenz: $json.konfidenz, begruendung: $json.begruendung, manuell_pruefen: $json.manuell_pruefen, zweitkategorie: $json.zweitkategorie, zweitkonfidenz: $json.zweitkonfidenz }, ($json.risiko !== undefined ? { risiko: $json.risiko } : {}))) }}",
         "options": {}
       },
       "id": "6e4d6d90-e884-424e-9ce8-daaa1851e5a0",
@@ -188,8 +188,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -144,
-        -464
+        304,
+        -560
       ],
       "retryOnFail": true,
       "maxTries": 3,
@@ -210,14 +210,14 @@
       "type": "n8n-nodes-base.stopAndError",
       "typeVersion": 1,
       "position": [
-        -144,
-        -240
+        304,
+        -368
       ]
     },
     {
       "parameters": {
-        "content": "## Klassifizierer – Einrichtung (Schnittstelle nach Knut, Stand 30.09.)\n1. **Webhook**: Header Auth anlegen, Name `x-webhook-secret`, Value = Geheimnis von Knut (NICHT der API-Key).\n2. **Kategorien laden** + **Klassifizierung setzen**: Credential „Gerüchteküche API\" (x-api-key).\n3. **Gemini Model**: dein Gemini-Credential, Temperatur 0,2.\n4. Workflow **publishen/aktivieren** und die **Production-URL** des Webhooks an Knut schicken.\n\n## Verhalten\n- Antwortet sofort (Supabase wartet max. 5 s).\n- Liefert Haupt- und Zweitkategorie mit je eigener Konfidenz (keine Summe 1). Sonstiges nie als Zweitkategorie.\n- manuell_pruefen = true bei Konfidenz < 0,6, bei Abstand Haupt/Zweit < 0,3 (Zweit >= 0,3) oder Sicherheitsbezug in der Zweitkategorie. Grund steht in pruefgruende (nur im Workflow, nicht im Backend).\n- Schwellen an 24 Testfällen geprüft (30.09.): bei sauberen Einthemen-Gerüchten meist kein Treffer, bei Ursache-Folge-Gerüchten oft schon.\n- Ungültige Zweitkategorie → wird weggelassen, Hauptkategorie wird trotzdem gesetzt.\n- Unbekannte Hauptkategorie → nichts zurückschreiben, Ausführung schlägt sichtbar fehl.\n- Zurückschreiben: 3 Versuche. 409 = schon klassifiziert, harmlos.\n\n## Testen\nWebhook hat Testdaten gepinnt (geruecht_id 1). Vorsicht: Der Test schreibt echt in Knuts DB – vorher mit Knut abstimmen, welche ID. Für Prompt-Tests den Testworkflow „Gerüchteküche – Klassifizierer TEST“ nutzen (Manual Trigger, schreibt nichts).",
-        "height": 520,
+        "content": "## Klassifizierer – Einrichtung (Schnittstelle nach Knut, Stand 01.10.)\n1. **Webhook**: Header Auth anlegen, Name `x-webhook-secret`, Value = Geheimnis von Knut (NICHT der API-Key).\n2. **Kategorien laden** + **Klassifizierung setzen**: Credential „Gerüchteküche API\" (x-api-key).\n3. **Gemini Model**: dein Gemini-Credential, Temperatur 0,2.\n4. **Risikomodell**: neue Credential vom Typ „Custom Auth“/„Header Auth Template“ (genericAuthType = httpTemplatedCustomAuth, n8n verlangt das bei einem neuen Bearer-Credential) anlegen. Vorlage: `{\"headers\":{\"Authorization\":\"Bearer {{api_key}}\"}}`, als Wert fuer `api_key` Knuts Token eintragen. Laeuft auf Knuts eigenem Rechner (Tailscale-Funnel) — kann aus sein, siehe unten.\n5. Workflow **publishen/aktivieren** und die **Production-URL** des Webhooks an Knut schicken.\n\n## Verhalten\n- Antwortet sofort (Supabase wartet max. 5 s).\n- Liefert Haupt- und Zweitkategorie mit je eigener Konfidenz (keine Summe 1). Sonstiges nie als Zweitkategorie.\n- manuell_pruefen = true bei Konfidenz < 0,6, bei Abstand Haupt/Zweit < 0,3 (Zweit >= 0,3) oder Sicherheitsbezug in der Zweitkategorie. Grund steht in pruefgruende (nur im Workflow, nicht im Backend).\n- Schwellen an 24 Testfällen geprüft (30.09.): bei sauberen Einthemen-Gerüchten meist kein Treffer, bei Ursache-Folge-Gerüchten oft schon.\n- Ungültige Zweitkategorie → wird weggelassen, Hauptkategorie wird trotzdem gesetzt.\n- Unbekannte Hauptkategorie → nichts zurückschreiben, Ausführung schlägt sichtbar fehl.\n- Zurückschreiben: 3 Versuche. 409 = schon klassifiziert, harmlos.\n\n## Risikomodell (seit 01.10.)\n- Läuft parallel zu Gemini (Branch ab „Sofort antworten“), wird in „Klassifikation + Risiko“ wieder zusammengeführt.\n- Bewertet den Text der ERSTEN Meldung (nicht die Kernaussage).\n- Modell nicht erreichbar (Knuts Rechner aus, Timeout 30 s, 4xx/5xx) → onError: continueRegularOutput, „Risiko einfügen“ lässt das Feld `risiko` dann komplett weg (nicht 0, nicht null). Knut holt es später per risiko_nachholen nach.\n- Nie wiederholen, nie über die 30 s hinaus warten.\n\n## Testen\nWebhook hat Testdaten gepinnt (geruecht_id 1). Vorsicht: Der Test schreibt echt in Knuts DB – vorher mit Knut abstimmen, welche ID. Für Prompt-Tests den Testworkflow „Gerüchteküche – Klassifizierer TEST“ nutzen (Manual Trigger, schreibt nichts). Risikomodell separat testbar per curl, siehe docs/risikomodell.md Abschnitt 5.",
+        "height": 760,
         "width": 560,
         "color": 5
       },
@@ -226,8 +226,65 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -1888,
-        -944
+        -1968,
+        -1232
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://desktop-4d4tfa1.taildd5fa7.ts.net/risiko",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpTemplatedCustomAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ texte: [ $('Webhook').first().json.body.text ] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "d217a712-74db-4f36-bd11-65bb30d5dccc",
+      "name": "Risikomodell",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -592,
+        -592
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpTemplatedCustomAuth": {
+          "id": "17liakUI0uMXQjkV",
+          "name": "Simplified Custom Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "57a16195-f62d-4ea4-b1bd-3848cf0779d0",
+      "name": "Klassifikation + Risiko",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -368,
+        -464
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fasst Klassifikation (Branch A) und Risikomodell-Antwort (Branch B) zusammen.\n// Modell kann aus sein (Knuts eigener Rechner): dann fehlt risiko einfach, wie von Knut\n// gefordert (nicht 0, nicht null erfinden, nicht erneut versuchen).\nconst eingabe = $input.first().json;\nconst ausgabe = { ...eingabe };\nconst wert = Array.isArray(eingabe.risiko) ? eingabe.risiko[0] : undefined;\nif (typeof wert === 'number') {\n  ausgabe.risiko = Math.max(0, Math.min(1, wert));\n} else {\n  delete ausgabe.risiko;\n}\nreturn [{ json: ausgabe }];"
+      },
+      "id": "b061cf29-6f1b-4ed0-865f-c68dfb8931ee",
+      "name": "Risiko einfügen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -144,
+        -464
       ]
     }
   ],
@@ -263,6 +320,11 @@
         [
           {
             "node": "Kategorien laden",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Risikomodell",
             "type": "main",
             "index": 0
           }
@@ -303,6 +365,39 @@
       ]
     },
     "Ergebnis prüfen": {
+      "main": [
+        [
+          {
+            "node": "Klassifikation + Risiko",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Risikomodell": {
+      "main": [
+        [
+          {
+            "node": "Klassifikation + Risiko",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Klassifikation + Risiko": {
+      "main": [
+        [
+          {
+            "node": "Risiko einfügen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Risiko einfügen": {
       "main": [
         [
           {
@@ -362,7 +457,7 @@
     "callerPolicy": "workflowsFromSameOwner",
     "availableInMCP": true
   },
-  "versionId": "eba78f61-ef86-43c9-9f49-6bb2e2e0c606",
+  "versionId": "e441d1b6-8121-439e-8147-d5678399a395",
   "meta": {
     "instanceId": "23d06a9c37e9ef9e9f51bc9facb0190838a1754bfcaaa00d24551b8fce39abef"
   },
