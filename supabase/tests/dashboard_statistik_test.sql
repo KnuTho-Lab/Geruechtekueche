@@ -98,12 +98,15 @@ begin
   assert (nachher #>> '{abweisungen,quote}')::numeric > 0 and (nachher #>> '{abweisungen,quote}')::numeric < 1,
     'Fall 8: Quote zwischen 0 und 1';
 
-  -- Fall 9: System aus api_aufrufe, Fehler ab Status 400, Rate-Limit extra
+  -- Fall 9: System aus api_aufrufe: Fehler nur ab Status 500, Anfragefehler (4xx ohne 429)
+  -- und Rate-Limit (429) getrennt
   insert into public.api_aufrufe (endpunkt, methode, status, dauer_ms)
-    values ('/test', 'GET', 200, 10), ('/test', 'GET', 500, 10), ('/test', 'GET', 429, 10);
+    values ('/test', 'GET', 200, 10), ('/test', 'GET', 500, 10), ('/test', 'GET', 503, 10),
+           ('/test', 'GET', 404, 10), ('/test', 'GET', 400, 10), ('/test', 'GET', 409, 10), ('/test', 'GET', 429, 10);
   nachher := public.dashboard_statistik(12);
-  assert (nachher #>> '{system,aufrufe_7d}')::int - (vorher #>> '{system,aufrufe_7d}')::int = 3, 'Fall 9: Aufrufe';
-  assert (nachher #>> '{system,fehler_7d}')::int - (vorher #>> '{system,fehler_7d}')::int = 2, 'Fall 9: Fehler';
+  assert (nachher #>> '{system,aufrufe_7d}')::int - (vorher #>> '{system,aufrufe_7d}')::int = 7, 'Fall 9: Aufrufe';
+  assert (nachher #>> '{system,fehler_7d}')::int - (vorher #>> '{system,fehler_7d}')::int = 2, 'Fall 9: Fehler zaehlen nur 500 und 503';
+  assert (nachher #>> '{system,anfragefehler_7d}')::int - (vorher #>> '{system,anfragefehler_7d}')::int = 3, 'Fall 9: Anfragefehler 400, 404, 409 ohne 429';
   assert (nachher #>> '{system,rate_limit_7d}')::int - (vorher #>> '{system,rate_limit_7d}')::int = 1, 'Fall 9: Rate-Limit';
 
   -- Fall 10: Eingabepruefung

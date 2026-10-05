@@ -308,7 +308,7 @@ function zeichneSystem(d) {
     <div class="card kpi"><div class="label">${label}</div><div class="sys-wert ${warn ? 'warn' : ''}">${wert}</div><div class="sub">${hint}</div></div>`;
   $('system-kacheln').innerHTML = [
     kachel('Aufrufe', zahl(s.aufrufe_7d), false, 'letzte 7 Tage'),
-    kachel('Fehlerquote', prozentText(quote), quote > 0.05, `${zahl(s.fehler_7d)} Fehler (Status ab 400)`),
+    kachel('Fehlerquote', prozentText(quote), quote > 0.05, `${zahl(s.fehler_7d)} Serverfehler (ab 500), dazu ${zahl(s.anfragefehler_7d)} Anfragefehler (4xx)`),
     kachel('Antwortzeit', `${zahl(s.antwortzeit_median_ms)} ms`, false, 'Median, 7 Tage'),
     kachel('Rate-Limit', zahl(s.rate_limit_7d), Number(s.rate_limit_7d) > 0, 'Treffer, 7 Tage'),
     kachel('Hängende', zahl(s.haengende), Number(s.haengende) > 0, 'Klassifizierungen > 10 Min.'),
@@ -318,7 +318,7 @@ function zeichneSystem(d) {
   const max = Math.max(1, ...s.tage.map((t) => Number(t.aufrufe) || 0));
   $('system-verlauf').innerHTML = `
     <h3>API-Aufrufe pro Tag</h3>
-    <p class="hint">Letzte ${s.tage.length} Tage, <span style="color:var(--crit)">rot</span> der Anteil mit Fehlerstatus.</p>
+    <p class="hint">Letzte ${s.tage.length} Tage, <span style="color:var(--crit)">rot</span> der Anteil mit Serverfehlern (Status ab 500).</p>
     <div class="tage-balken" role="img" aria-label="Aufrufe pro Tag">${s.tage.map((t) => {
       const n = Number(t.aufrufe) || 0, f = Math.min(n, Number(t.fehler) || 0);
       const h = (n / max) * 100;
