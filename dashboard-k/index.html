@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gerüchteküche Statistik</title>
+<title>Gerüchteküche Dashboard</title>
 <meta name="description" content="Statistik der Gerüchteküche: Meldungen, Brodel-Heatmap, offene und bearbeitete Gerüchte, Risikostufen, Abweisungen und Systemzustand.">
 <meta name="robots" content="noindex">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -134,6 +134,56 @@
   .banner { background: var(--crit-soft); border: 1px solid var(--crit); color: var(--text); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 14px; }
   .skeleton { background: var(--skeleton); border-radius: 6px; color: transparent !important; }
 
+
+  /* Arbeitsbereich */
+  .a-filter { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+  .a-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .a-chip { font: inherit; font-size: 13px; font-weight: 600; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+  .a-chip[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); border-color: var(--accent); }
+  .a-chip b { font-variant-numeric: tabular-nums; margin-left: 4px; }
+  .a-felder { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; }
+  .a-felder label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .a-felder select, .a-felder input { font: inherit; font-size: 14px; font-weight: 400; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; max-width: 100%; }
+  .a-suche { flex: 1 1 220px; }
+  .a-felder select:focus-visible, .a-felder input:focus-visible, .a-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .a-zaehler { font-size: 13px; color: var(--muted); }
+  .a-grid { display: grid; grid-template-columns: minmax(280px, 38%) 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .a-grid { grid-template-columns: 1fr; } }
+  .a-liste { display: flex; flex-direction: column; gap: 8px; max-height: 72vh; overflow-y: auto; padding: 2px; }
+  @media (max-width: 900px) { .a-liste { max-height: 46vh; } }
+  .a-eintrag { text-align: left; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-left-width: 4px; border-radius: 10px; padding: 10px 12px; cursor: pointer; display: block; width: 100%; }
+  .a-eintrag:hover { border-color: var(--faint); }
+  .a-eintrag[aria-current="true"] { background: var(--accent-soft); border-color: var(--accent); }
+  .a-eintrag:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .a-eintrag .zeile1 { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); font-weight: 600; }
+  .a-eintrag .aussage { font-size: 14px; margin: 3px 0 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .a-eintrag .meta { font-size: 12px; color: var(--muted); }
+  .r-hoch { border-left-color: var(--crit); } .r-mittel { border-left-color: var(--c3); } .r-niedrig { border-left-color: var(--c5); } .r-ohne { border-left-color: var(--faint); }
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--skeleton); color: var(--text); white-space: nowrap; }
+  .badge.hoch { background: var(--crit-soft); color: var(--crit); }
+  .a-detail { position: sticky; top: 76px; }
+  @media (max-width: 900px) { .a-detail { position: static; } }
+  .a-detail h2 { font-size: 18px; margin: 0 0 4px; line-height: 1.3; }
+  .a-detail h4 { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 20px 0 8px; }
+  .a-kopfzeile { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; color: var(--muted); font-size: 13px; }
+  .a-kv { display: grid; grid-template-columns: 120px 1fr; gap: 4px 12px; font-size: 14px; }
+  .a-kv dt { color: var(--muted); } .a-kv dd { margin: 0; }
+  .a-hinweis { background: var(--crit-soft); border: 1px solid var(--crit); border-radius: 8px; padding: 6px 10px; font-size: 13px; margin-top: 10px; }
+  .a-status { display: flex; flex-wrap: wrap; gap: 8px; }
+  .a-status button { font: inherit; font-size: 14px; font-weight: 600; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  .a-status button:hover:not(:disabled) { border-color: var(--accent); }
+  .a-status button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); cursor: default; }
+  .a-status button:disabled { opacity: .7; cursor: not-allowed; }
+  .a-status button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .a-rueckmeldung { font-size: 13px; margin-top: 8px; min-height: 1.4em; color: var(--muted); }
+  .a-rueckmeldung.fehler { color: var(--crit); }
+  .a-meldung { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: var(--surface-2); }
+  .a-meldung .kopf { font-size: 12px; color: var(--muted); margin-bottom: 4px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  .a-meldung p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+  .a-historie { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+  .a-historie li { padding: 4px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .a-leer { color: var(--muted); padding: 24px 8px; text-align: center; }
+
   #tip { position: fixed; z-index: 20; pointer-events: none; background: var(--text); color: var(--bg); font-size: 12.5px; padding: 6px 9px; border-radius: 6px; max-width: 260px; opacity: 0; transition: opacity .08s; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
   #tip.sichtbar { opacity: 1; }
   footer { color: var(--muted); font-size: 12.5px; padding: 8px 0 32px; }
@@ -144,10 +194,10 @@
 <body>
 <header>
   <div class="wrap">
-    <div class="brand">Gerüchteküche <small>Statistik</small></div>
+    <div class="brand">Gerüchteküche <small>Dashboard</small></div>
     <nav class="tabs" role="tablist" aria-label="Bereiche" id="tabs" hidden>
       <button class="tab" role="tab" aria-selected="true" id="tab-statistik">Statistik</button>
-      <button class="tab" role="tab" aria-selected="false" aria-disabled="true" id="tab-arbeit" title="Kommt als Nächstes">Arbeitsbereich<span class="bald">folgt</span></button>
+      <button class="tab" role="tab" aria-selected="false" id="tab-arbeit">Arbeitsbereich</button>
     </nav>
     <div class="kopf-rechts" id="kopf-rechts" hidden>
       <span id="stand" aria-live="polite"></span>
@@ -203,6 +253,27 @@
       Gesamtzahl und Heatmap zählen Meldungen, Status, Risiko und Themen zählen Gerüchte.
     </footer>
   </div>
+  <!-- Arbeitsbereich -->
+  <div id="arbeit" hidden>
+    <div class="banner" id="a-banner" role="alert" hidden></div>
+    <div class="a-filter card" id="a-filter" role="search" aria-label="Gerüchte filtern">
+      <div class="a-chips" id="a-status-chips" role="group" aria-label="Status"></div>
+      <div class="a-felder">
+        <label>Risiko
+          <select id="a-risiko"><option value="alle">alle</option><option value="hoch">hoch</option><option value="mittel">mittel</option><option value="niedrig">niedrig</option><option value="ohne">ohne Wert</option></select>
+        </label>
+        <label>Thema <select id="a-kategorie"><option value="alle">alle</option></select></label>
+        <label class="a-suche">Suche <input id="a-suche" type="search" placeholder="Aussage, Thema oder #Nummer" autocomplete="off" maxlength="100"></label>
+        <button class="knopf-klein" id="a-zuruecksetzen" type="button">Zurücksetzen</button>
+      </div>
+      <div class="a-zaehler" id="a-zaehler" aria-live="polite"></div>
+    </div>
+    <div class="a-grid">
+      <div class="a-liste" id="a-liste" role="list" aria-label="Gerüchte"></div>
+      <div class="card a-detail" id="a-detail" aria-live="polite"></div>
+    </div>
+  </div>
+
 </main>
 
 <div id="tip" role="tooltip"></div>
