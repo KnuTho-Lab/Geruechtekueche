@@ -10,11 +10,11 @@ export const ERLAUBTE_URSPRUENGE = [
   "http://localhost:8792",
 ];
 
-export function corsHeader(origin: string | null): Record<string, string> | null {
+export function corsHeader(origin: string | null, methoden = "POST, OPTIONS"): Record<string, string> | null {
   if (!origin || !ERLAUBTE_URSPRUENGE.includes(origin)) return null;
   return {
     "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": methoden,
     "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
     "Access-Control-Max-Age": "600",
     "Vary": "Origin",

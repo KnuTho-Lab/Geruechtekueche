@@ -516,7 +516,7 @@ Deno.test("admin-key: nichts gesetzt -> null", () => {
 
 // Functions fuer die Browser-Seiten, nicht fuer den Agenten: Login per Supabase Auth statt
 // x-api-key, deshalb nicht in /calls. Jede Ausnahme hier bewusst eintragen.
-const NICHT_IM_KATALOG = ["agent-chat"];
+const NICHT_IM_KATALOG = ["agent-chat", "statistik"];
 
 Deno.test("calls: jede Function-Ordner steht genau einmal im Katalog", async () => {
   const ordner: string[] = [];
