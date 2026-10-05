@@ -63,7 +63,7 @@ export function demoStatistik({ leer = false } = {}) {
         const aufrufe = leer ? 0 : Math.round(20 + r() * 60);
         return { tag: iso(d), aufrufe, fehler: leer ? 0 : Math.round(aufrufe * r() * 0.08) };
       }),
-      aufrufe_7d: leer ? 0 : 312, fehler_7d: leer ? 0 : 9, antwortzeit_median_ms: leer ? 0 : 412,
+      aufrufe_7d: leer ? 0 : 312, fehler_7d: leer ? 0 : 9, anfragefehler_7d: leer ? 0 : 14, antwortzeit_median_ms: leer ? 0 : 412,
       rate_limit_7d: 0, haengende: leer ? 0 : 1, risiko_queue: leer ? 0 : 3,
     },
   };
