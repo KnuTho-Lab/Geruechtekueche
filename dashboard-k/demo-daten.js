@@ -68,3 +68,74 @@ export function demoStatistik({ leer = false } = {}) {
     },
   };
 }
+
+// ---------- Arbeitsbereich (Demo) ----------
+// Veränderlicher Zustand im Speicher, damit Statuswechsel, Konflikt und Verlauf lokal ausprobiert
+// werden können. Beim Neuladen der Seite ist alles wieder wie am Anfang.
+const AUSSAGEN = [
+  ['Werk Nord soll im Frühjahr geschlossen werden', 'Standortschließung oder Massenentlassung', 0.91],
+  ['In Halle 3 gab es einen Beinahe-Unfall an der Presse, nichts wurde gemeldet', 'Sicherheit und Gesundheit', 0.84],
+  ['Die Geschäftsführung verhandelt mit einem Investor über den Verkauf', 'Übernahme oder Verkauf', 0.78],
+  ['Kundendaten sind in einem Phishing-Angriff abgeflossen', 'Datenleck oder Cyberangriff', 0.8],
+  ['Boni werden dieses Jahr komplett gestrichen', 'Vergütung', 0.52],
+  ['Die Kantine bekommt einen neuen Betreiber', 'Annehmlichkeiten und Arbeitsumfeld', 0.12],
+  ['Ein Abteilungsleiter soll Spesen falsch abgerechnet haben', 'Schwere Vorwürfe gegen Personen', 0.69],
+  ['Es gibt Probleme mit der Charge 7731, Rückruf möglich', 'Qualität und Produkt', 0.58],
+  ['Das Homeoffice wird ab Januar eingeschränkt', 'Annehmlichkeiten und Arbeitsumfeld', 0.33],
+  ['Abwasser wurde ohne Genehmigung eingeleitet', 'Umwelt- oder Compliance-Verstoß', 0.88],
+  ['Die Parkplätze am Standort Süd werden kostenpflichtig', 'Annehmlichkeiten und Arbeitsumfeld', 0.21],
+  ['Es kursiert, dass die Firma bald zahlungsunfähig ist', 'Insolvenz oder Zahlungsunfähigkeit', 0.95],
+];
+const demoGeruechte = AUSSAGEN.map(([kernaussage, kategorie, risiko], i) => ({
+  geruecht_id: i + 1, status: i === 5 ? 'widerlegt' : i === 8 ? 'bestätigt' : 'offen', kernaussage, kategorie, zweitkategorie: i % 3 === 0 ? 'Sonstiges' : null,
+  risiko, kategorie_konfidenz: 0.6 + (i % 4) * 0.1, zweitkategorie_konfidenz: i % 3 === 0 ? 0.31 : null,
+  kategorie_begruendung: 'Die Meldung beschreibt eine Veränderung, die diesem Thema am nächsten liegt.',
+  manuell_pruefen: i === 6, anzahl: 1 + ((i * 3) % 7),
+  historie: i === 5 ? [{ historie_id: 1, alt: 'offen', neu: 'widerlegt', geaendert_am: new Date(Date.now() - 86400000).toISOString(), geaendert_von: 'thomas' }]
+    : i === 8 ? [{ historie_id: 2, alt: 'offen', neu: 'bestätigt', geaendert_am: new Date(Date.now() - 7200000).toISOString(), geaendert_von: 'knut' }] : [],
+}));
+let demoHistorieId = 10;
+
+export function demoArbeitsliste() {
+  return {
+    erzeugt_am: new Date().toISOString(),
+    grenzen: { mittel: 0.4, hoch: 0.75 },
+    geruechte: [...demoGeruechte].reverse().map((g) => ({
+      geruecht_id: g.geruecht_id, status: g.status, kernaussage: g.kernaussage, kategorie: g.kategorie, zweitkategorie: g.zweitkategorie,
+      risiko: g.risiko, risiko_status: 'berechnet', manuell_pruefen: g.manuell_pruefen, anzahl_meldungen: g.anzahl,
+      angelegt_am: new Date(Date.now() - g.geruecht_id * 3600000 * 5).toISOString(),
+      letzte_meldung_am: new Date(Date.now() - g.geruecht_id * 3600000 * 3).toISOString(),
+      status_geaendert_am: g.historie.length ? g.historie[g.historie.length - 1].geaendert_am : null,
+    })),
+  };
+}
+
+export function demoDetail(id) {
+  const g = demoGeruechte.find((x) => x.geruecht_id === Number(id));
+  if (!g) return null;
+  return {
+    geruecht_id: g.geruecht_id, status: g.status, kernaussage: g.kernaussage, kategorie: g.kategorie,
+    kategorie_konfidenz: g.kategorie_konfidenz, zweitkategorie: g.zweitkategorie, zweitkategorie_konfidenz: g.zweitkategorie_konfidenz,
+    kategorie_begruendung: g.kategorie_begruendung, manuell_pruefen: g.manuell_pruefen, risiko: g.risiko, risiko_status: 'berechnet',
+    angelegt_am: new Date(Date.now() - g.geruecht_id * 3600000 * 5).toISOString(),
+    meldungen: Array.from({ length: g.anzahl }, (_, k) => ({
+      meldung_id: g.geruecht_id * 100 + k,
+      eingegangen_am: new Date(Date.now() - (g.geruecht_id * 3 + g.anzahl - k) * 3600000).toISOString(),
+      text: k === 0 ? `Ich habe gehört, ${g.kernaussage.charAt(0).toLowerCase()}${g.kernaussage.slice(1)}. Mehr weiß ich nicht, aber in der Kantine reden alle davon.` : `Das hat mir ein Kollege auch erzählt (${k + 1}).`,
+      standort: k % 2 === 0 ? 'Werk Nord' : null, emotion: k % 3 === 0 ? 'besorgt' : null, quellenkette: k % 2 === 0 ? 'weitererzählt' : null,
+    })),
+    historie: g.historie,
+  };
+}
+
+// Gibt dieselben HTTP-Status wie die echte Function zurück, damit Konflikt und Erfolg lokal sichtbar sind.
+export function demoStatusSetzen(id, neu, erwartet) {
+  const g = demoGeruechte.find((x) => x.geruecht_id === Number(id));
+  if (!g) return { status: 404, body: { fehler: ['Dieses Gerücht gibt es nicht'] } };
+  if (erwartet && g.status !== erwartet) return { status: 409, body: { aktuell: g.status } };
+  if (g.status === neu) return { status: 200, body: { ergebnis: 'unveraendert', status: g.status } };
+  g.historie.push({ historie_id: ++demoHistorieId, alt: g.status, neu, geaendert_am: new Date().toISOString(), geaendert_von: 'demo' });
+  const vorher = g.status;
+  g.status = neu;
+  return { status: 200, body: { ergebnis: 'ok', status: neu, vorher } };
+}

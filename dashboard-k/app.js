@@ -1,7 +1,8 @@
 // Statistik-Dashboard der Gerüchteküche. Login per Supabase Auth (wie melden/), die Zahlen kommen
 // von der Edge Function statistik, die nur Zählungen liefert. Kein Schlüssel für Tabellen im
 // Browser: der öffentliche Schlüssel öffnet ohne Login nichts.
-import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+import { supabase, funktion } from './api.js';
+import { aktiviereArbeit, leereArbeit } from './arbeit.js';
 import { nutzernameZuEmail, anmeldeFehlerText } from '../melden/logik.js';
 import {
   RISIKO_STUFEN, STANDARD_GRENZEN,
@@ -10,12 +11,8 @@ import {
 } from './logik.js';
 
 const KONFIG = {
-  supabaseUrl: 'https://apdwjhufucblzxaoztsv.supabase.co',
-  // Öffentlicher Schlüssel, für den Browser gedacht. Öffnet ohne Login nichts.
-  supabaseKey: 'sb_publishable_weKrqRKNYmPJmUDdkT8FWg_VCA7wJ1m',
   funktion: 'statistik',
   wochen: 12,
-  zeitlimitMs: 20000,
   autoAktualisierenMs: 120000,
 };
 
@@ -23,7 +20,6 @@ const KONFIG = {
 // Auf der echten Seite (anderer Hostname) ist das nie aktiv.
 const DEMO = ['localhost', '127.0.0.1'].includes(location.hostname) ? new URLSearchParams(location.search).get('demo') : null;
 
-const supabase = createClient(KONFIG.supabaseUrl, KONFIG.supabaseKey);
 const $ = (id) => document.getElementById(id);
 const WOCHENTAGE = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const STATUS = [
@@ -42,6 +38,8 @@ let daten = null;
 let heatModus = 'tage'; // 'tage' | 'kategorien'
 let ladeNummer = 0;
 let timer = null;
+let tab = 'statistik'; // 'statistik' | 'arbeit'
+let veraltet = false; // im Arbeitsbereich wurde ein Status geändert, die Statistik muss neu laden
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const tipAttr = (t) => `data-tip="${esc(t)}"`;
@@ -50,18 +48,40 @@ const tipAttr = (t) => `data-tip="${esc(t)}"`;
 
 function zeigeAnmeldung() {
   stopTimer();
+  leereArbeit();
+  tab = 'statistik';
+  $('tab-statistik').setAttribute('aria-selected', 'true');
+  $('tab-arbeit').setAttribute('aria-selected', 'false');
   $('statistik').hidden = true;
+  $('arbeit').hidden = true;
   $('tabs').hidden = true;
   $('kopf-rechts').hidden = true;
   $('anmeldung').hidden = false;
   $('nutzername').focus();
 }
 
-function zeigeStatistik() {
+function zeigeApp() {
   $('anmeldung').hidden = true;
-  $('statistik').hidden = false;
+  $('statistik').hidden = tab !== 'statistik';
+  $('arbeit').hidden = tab !== 'arbeit';
   $('tabs').hidden = false;
   $('kopf-rechts').hidden = false;
+}
+
+function wechsleTab(neu) {
+  if (neu === tab) return;
+  tab = neu;
+  for (const [id, name] of [['tab-statistik', 'statistik'], ['tab-arbeit', 'arbeit']]) {
+    $(id).setAttribute('aria-selected', String(name === tab));
+  }
+  zeigeApp();
+  if (tab === 'statistik') {
+    if (veraltet) { veraltet = false; lade(); }
+    startTimer();
+  } else {
+    stopTimer();
+    aktiviereArbeit({ demo: DEMO });
+  }
 }
 
 function banner(text) {
@@ -77,29 +97,23 @@ async function lade() {
   if (DEMO !== null) {
     const { demoStatistik } = await import('./demo-daten.js');
     daten = demoStatistik({ leer: DEMO === 'leer' });
-    zeigeStatistik();
+    zeigeApp();
     zeichne();
     $('stand').textContent = 'Demo-Daten';
     return;
   }
   const { data } = await supabase.auth.getSession();
-  const token = data?.session?.access_token;
-  if (!token) return zeigeAnmeldung();
-  zeigeStatistik();
+  if (!data?.session?.access_token) return zeigeAnmeldung();
+  zeigeApp();
   $('neu-laden').disabled = true;
   try {
-    const res = await fetch(`${KONFIG.supabaseUrl}/functions/v1/${KONFIG.funktion}?wochen=${KONFIG.wochen}`, {
-      headers: { Authorization: `Bearer ${token}`, apikey: KONFIG.supabaseKey },
-      signal: AbortSignal.timeout(KONFIG.zeitlimitMs),
-      cache: 'no-store',
-    });
+    const { status, json } = await funktion(KONFIG.funktion, { query: { wochen: KONFIG.wochen } });
     if (nr !== ladeNummer) return; // eine neuere Abfrage läuft, diese Antwort ist überholt
-    if (res.status === 401) {
+    if (status === 401) {
       await supabase.auth.signOut();
       return zeigeAnmeldung();
     }
-    if (!res.ok) throw Object.assign(new Error('http'), { status: res.status });
-    const json = await res.json();
+    if (status !== 200) throw Object.assign(new Error('http'), { status });
     if (!statistikGueltig(json)) throw Object.assign(new Error('form'), { status: 502 });
     daten = json;
     banner('');
@@ -116,7 +130,7 @@ async function lade() {
 
 function startTimer() {
   stopTimer();
-  timer = setInterval(() => { if (!document.hidden) lade(); }, KONFIG.autoAktualisierenMs);
+  timer = setInterval(() => { if (!document.hidden && tab === 'statistik') lade(); }, KONFIG.autoAktualisierenMs);
 }
 function stopTimer() { if (timer) clearInterval(timer); timer = null; }
 
@@ -368,15 +382,17 @@ $('abmelden').addEventListener('click', async () => {
   daten = null;
   await supabase.auth.signOut();
 });
-$('neu-laden').addEventListener('click', () => lade());
-$('tab-arbeit').addEventListener('click', (e) => e.preventDefault());
-document.addEventListener('visibilitychange', () => { if (!document.hidden && daten && $('statistik').hidden === false) lade(); });
+$('neu-laden').addEventListener('click', () => (tab === 'statistik' ? lade() : aktiviereArbeit({ demo: DEMO, neu: true })));
+$('tab-statistik').addEventListener('click', () => wechsleTab('statistik'));
+$('tab-arbeit').addEventListener('click', () => wechsleTab('arbeit'));
+document.addEventListener('geruechte-geaendert', () => { veraltet = true; });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && daten && tab === 'statistik' && !$('statistik').hidden) lade(); });
 
 supabase.auth.onAuthStateChange((ereignis, sitzung) => {
   if (DEMO !== null) { if (ereignis === 'INITIAL_SESSION') setTimeout(lade, 0); return; }
   if (ereignis === 'SIGNED_OUT' || !sitzung) { zeigeAnmeldung(); return; }
   if (ereignis === 'SIGNED_IN' || ereignis === 'INITIAL_SESSION') {
     // Aufruf aus dem Callback herausnehmen: supabase-js verbietet weitere Auth-Aufrufe darin.
-    setTimeout(() => { lade(); startTimer(); }, 0);
+    setTimeout(() => { if (tab === 'statistik') { lade(); startTimer(); } else { zeigeApp(); } }, 0);
   }
 });
