@@ -7,7 +7,7 @@ export const HEAT_STUFEN = 5; // 0 = keine Meldung, 1 bis 4 = zunehmend viele
 
 // Dieselben Grenzen wie in der SQL-Funktion; die Antwort der Function liefert sie mit
 // (grenzen.mittel, grenzen.hoch) und gewinnt gegen diesen Standard.
-export const STANDARD_GRENZEN = { mittel: 0.4, hoch: 0.75 };
+export const STANDARD_GRENZEN = { mittel: 0.4, hoch: 0.65 };
 
 export function risikoStufe(wert, grenzen = STANDARD_GRENZEN) {
   if (wert === null || wert === undefined || Number.isNaN(Number(wert))) return null;

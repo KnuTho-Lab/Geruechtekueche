@@ -1,5 +1,5 @@
 -- Test fuer public.dashboard_statistik (Migration 20261005100000): Zaehlung gegen bekannte
--- Testdaten, Risikostufen an den Grenzen 0,40 und 0,75, Tagesgrenze in Berliner Zeit,
+-- Testdaten, Risikostufen an den Grenzen 0,40 und 0,65, Tagesgrenze in Berliner Zeit,
 -- Abweisungen, Eingabepruefung, Rechte. Misst immer die Differenz zum Stand vor den
 -- Testdaten, weil die Live-Datenbank echte Eintraege hat.
 -- Laeuft in einer Transaktion mit ROLLBACK: es bleibt nichts zurueck.
@@ -22,7 +22,7 @@ begin
   vorher := public.dashboard_statistik(12);
 
   -- Fall 1: Struktur und Grenzen
-  assert vorher #>> '{grenzen,mittel}' = '0.40' and vorher #>> '{grenzen,hoch}' = '0.75', 'Fall 1: Grenzen';
+  assert vorher #>> '{grenzen,mittel}' = '0.40' and vorher #>> '{grenzen,hoch}' = '0.65', 'Fall 1: Grenzen';
   assert (vorher #>> '{heatmap,von}')::date = montag - 11 * 7, 'Fall 1: Heatmap beginnt nicht am Montag vor 11 Wochen';
   assert (vorher #> '{heatmap,tage}') -> -1 ->> 'tag' = heute::text, 'Fall 1: letzter Tag ist nicht heute (Berlin)';
   assert jsonb_array_length(vorher #> '{abweisungen,gruende}') = 4, 'Fall 1: vier Abweisungsgruende';
@@ -34,17 +34,17 @@ begin
   insert into public.geruechte (kategorie_id, risiko_status, risiko, risiko_berechnet_am, risiko_modell, status)
     values (kat, 'berechnet', 0.40, now(), 't', 'offen') returning geruecht_id into g2;
   insert into public.geruechte (kategorie_id, risiko_status, risiko, risiko_berechnet_am, risiko_modell, status)
-    values (kat, 'berechnet', 0.74, now(), 't', 'widerlegt') returning geruecht_id into g3;
+    values (kat, 'berechnet', 0.64, now(), 't', 'widerlegt') returning geruecht_id into g3;
   insert into public.geruechte (kategorie_id, risiko_status, risiko, risiko_berechnet_am, risiko_modell, status)
-    values (kat, 'berechnet', 0.75, now(), 't', 'offen') returning geruecht_id into g4;
+    values (kat, 'berechnet', 0.65, now(), 't', 'offen') returning geruecht_id into g4;
   insert into public.geruechte (kategorie_id, risiko_status, status)
     values (kat, 'queue', 'bestätigt') returning geruecht_id into g5;
   insert into public.meldungen (geruecht_id, text) select g, '[TEST] statistik' from unnest(array[g1, g2, g3, g4, g5]) g;
   nachher := public.dashboard_statistik(12);
 
   assert (nachher #>> '{risiko,niedrig}')::int - (vorher #>> '{risiko,niedrig}')::int = 1, 'Fall 2: niedrig (0,39)';
-  assert (nachher #>> '{risiko,mittel}')::int - (vorher #>> '{risiko,mittel}')::int = 2, 'Fall 2: mittel (0,40 und 0,74)';
-  assert (nachher #>> '{risiko,hoch}')::int - (vorher #>> '{risiko,hoch}')::int = 1, 'Fall 2: hoch (0,75)';
+  assert (nachher #>> '{risiko,mittel}')::int - (vorher #>> '{risiko,mittel}')::int = 2, 'Fall 2: mittel (0,40 und 0,64)';
+  assert (nachher #>> '{risiko,hoch}')::int - (vorher #>> '{risiko,hoch}')::int = 1, 'Fall 2: hoch (0,65)';
   assert (nachher #>> '{risiko,ohne_wert}')::int - (vorher #>> '{risiko,ohne_wert}')::int = 1, 'Fall 2: ohne Wert (queue)';
   assert (nachher #>> '{risiko,hoch_offen}')::int - (vorher #>> '{risiko,hoch_offen}')::int = 1, 'Fall 2: hoch und offen';
 

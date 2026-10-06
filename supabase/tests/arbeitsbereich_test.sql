@@ -100,7 +100,7 @@ begin
 
   -- Fall 11: Liste enthaelt das Geruecht mit Anzahl Meldungen, aber keine Texte
   r := public.arbeitsbereich_liste();
-  assert r #>> '{grenzen,hoch}' = '0.75' and r #>> '{grenzen,mittel}' = '0.40', 'Fall 11: Grenzen';
+  assert r #>> '{grenzen,hoch}' = '0.65' and r #>> '{grenzen,mittel}' = '0.40', 'Fall 11: Grenzen';
   select e into zeile from jsonb_array_elements(r -> 'geruechte') e where (e ->> 'geruecht_id')::bigint = g;
   assert (zeile.e ->> 'anzahl_meldungen')::int = 2, 'Fall 11: anzahl_meldungen';
   assert zeile.e ->> 'status_geaendert_am' is not null, 'Fall 11: status_geaendert_am fehlt';
