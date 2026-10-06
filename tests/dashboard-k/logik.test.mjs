@@ -9,12 +9,12 @@ import {
   abweisungsName, statistikFehlerText, statistikGueltig,
 } from '../../dashboard-k/logik.js';
 
-test('risikoStufe: Grenzen 0,40 und 0,75 gehören zur höheren Stufe', () => {
+test('risikoStufe: Grenzen 0,40 und 0,65 gehören zur höheren Stufe', () => {
   assert.equal(risikoStufe(0), 'niedrig');
   assert.equal(risikoStufe(0.39), 'niedrig');
   assert.equal(risikoStufe(0.4), 'mittel');
-  assert.equal(risikoStufe(0.74), 'mittel');
-  assert.equal(risikoStufe(0.75), 'hoch');
+  assert.equal(risikoStufe(0.64), 'mittel');
+  assert.equal(risikoStufe(0.65), 'hoch');
   assert.equal(risikoStufe(1), 'hoch');
 });
 
@@ -23,7 +23,7 @@ test('risikoStufe: kein Wert ergibt null, eigene Grenzen gewinnen', () => {
   assert.equal(risikoStufe(undefined), null);
   assert.equal(risikoStufe('abc'), null);
   assert.equal(risikoStufe(0.5, { mittel: 0.6, hoch: 0.9 }), 'niedrig');
-  assert.deepEqual(STANDARD_GRENZEN, { mittel: 0.4, hoch: 0.75 });
+  assert.deepEqual(STANDARD_GRENZEN, { mittel: 0.4, hoch: 0.65 });
 });
 
 test('prozent: gerundet, 0 bei leerer Grundmenge', () => {

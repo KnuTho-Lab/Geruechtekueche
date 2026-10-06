@@ -39,7 +39,7 @@ export function demoStatistik({ leer = false } = {}) {
   return {
     erzeugt_am: new Date().toISOString(),
     zeitzone: 'Europe/Berlin',
-    grenzen: { mittel: 0.4, hoch: 0.75 },
+    grenzen: { mittel: 0.4, hoch: 0.65 },
     meldungen: { gesamt, letzte_7_tage: letzte7, schnitt_vorher: leer ? 0 : 18.5 },
     heatmap: { von: tage[0].tag, wochen: 12, tage, kategorien },
     geruechte: leer
@@ -99,7 +99,7 @@ let demoHistorieId = 10;
 export function demoArbeitsliste() {
   return {
     erzeugt_am: new Date().toISOString(),
-    grenzen: { mittel: 0.4, hoch: 0.75 },
+    grenzen: { mittel: 0.4, hoch: 0.65 },
     geruechte: [...demoGeruechte].reverse().map((g) => ({
       geruecht_id: g.geruecht_id, status: g.status, kernaussage: g.kernaussage, kategorie: g.kategorie, zweitkategorie: g.zweitkategorie,
       risiko: g.risiko, risiko_status: 'berechnet', manuell_pruefen: g.manuell_pruefen, anzahl_meldungen: g.anzahl,

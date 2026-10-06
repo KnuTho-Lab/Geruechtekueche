@@ -127,7 +127,7 @@ test('arbeitFehlerText: eigener Text je Fall, nie Technik', () => {
 });
 
 test('listeGueltig und detailGueltig: nur vollständige Antworten', () => {
-  const liste = { grenzen: { mittel: 0.4, hoch: 0.75 }, geruechte: [{ geruecht_id: 1, status: 'offen' }] };
+  const liste = { grenzen: { mittel: 0.4, hoch: 0.65 }, geruechte: [{ geruecht_id: 1, status: 'offen' }] };
   assert.equal(listeGueltig(liste), true);
   assert.equal(listeGueltig({ ...liste, geruechte: [] }), true);
   assert.equal(listeGueltig({ ...liste, geruechte: [{ status: 'offen' }] }), false);
